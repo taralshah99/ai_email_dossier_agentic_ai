@@ -6,9 +6,9 @@ class MeetingAgents:
 
     def email_triage_agent(self):
         return Agent(
-            role="Departmental Relevance Analyst",
+            role="Relevance Analyst",
             goal=(
-                "Strictly analyze an email subject for relevance to a business department. "
+                "Strictly analyze an email subject for relevance to a business requirement. "
                 "Your ONLY job is to output a single word: YES or NO. Nothing else."
             ),
             backstory=(
