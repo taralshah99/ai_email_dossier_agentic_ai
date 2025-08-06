@@ -1,188 +1,282 @@
-import streamlit as st
-from datetime import date
-import sys
 import os
+import base64
+import re
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from dotenv import load_dotenv #type:ignore
+from crewai import Crew, Process, Task #type:ignore
+from langchain_groq import ChatGroq #type:ignore
 
-# Add the current directory to the Python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
+from crewai_agents import MeetingAgents
 
-try:
-    from main import (
-        find_relevant_threads,
-        analyze_thread_content,
-        analyze_multiple_threads,
-        generate_product_dossier,
-    )
-    from utils import parse_crewai_output
-except ImportError as e:
-    st.error(f"Error importing modules: {e}")
-    st.stop()
+# --- Setup ---
+load_dotenv()
+# --- MODEL CHANGE ---
+# Switched to a model known for strong instruction-following.
+llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="groq/deepseek-r1-distill-llama-70b") 
+# --------------------
+gmail_service = get_gmail_service()
+agents = MeetingAgents(llm=llm)
 
-# Page configuration
-st.set_page_config(
-    page_title="Email Thread Analyzer", page_icon="📧", layout="wide"
-)
+# Flask app setup
+app = Flask(__name__)
+CORS(app)
 
-# Initialize session state variables
-if "threads" not in st.session_state:
-    st.session_state.threads = []
-if "selected_thread_ids" not in st.session_state:
-    st.session_state.selected_thread_ids = []
-if "analysis_result" not in st.session_state:
-    st.session_state.analysis_result = None
-if "dossier" not in st.session_state:
-    st.session_state.dossier = None
-
-# Title and description
-st.title("📧 Email Thread Analyzer and Product Dossier Creator")
-st.markdown(
-    """
-This application helps you find relevant email threads and analyze them on-demand.
-1. First, find relevant emails based on a date range and optional filters (keyword, sender, or general query).
-2. Then, select one or more threads to analyze their content.
-3. Finally, generate a detailed product dossier if needed.
-"""
-)
-
-# Sidebar for inputs
-with st.sidebar:
-    st.header("Search Parameters")
-
-    st.subheader("Date Range")
-    start_date = st.date_input(
-        "Start Date", value=date(2023, 1, 1), help="Select the start date for email search"
-    )
-    end_date = st.date_input(
-        "End Date", value=date.today(), help="Select the end date for email search"
-    )
-
-    st.subheader("Search Filters (All Optional)")
+# --- Helper function to parse agent output ---
+def parse_product_info(text: str):
+    # This regex is more robust to find the labels even with markdown
+    product_name_match = re.search(r"Product Name:\s*\**(.+?)\**\s*$", str(text), re.MULTILINE)
+    product_domain_match = re.search(r"Product Domain:\s*\**(.+?)\**\s*$", str(text), re.MULTILINE)
     
-    keyword = st.text_input(
-        "Keyword (optional)",
-        placeholder="e.g., meeting, project, proposal",
-        help="Enter keywords to search for in email content (e.g., meeting, project, proposal).",
-    )
+    return {
+        "product_name": product_name_match.group(1).strip() if product_name_match else "Unknown Product",
+        "product_domain": product_domain_match.group(1).strip() if product_domain_match else "general product"
+    }
 
-    email_id = st.text_input(
-        "Sender Email (optional)",
-        placeholder="example@gmail.com",
-        help="Enter a specific sender email address to narrow the search.",
-    )
+# --- Core Functions ---
+
+def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
+    """Finds and filters email threads based on keyword, sender, or general query search."""
+    # Build the base query with date range
+    search_query = f"after:{start_date} before:{end_date}"
     
-    query = st.text_input(
-        "General Query (optional)",
-        placeholder="e.g., AWS deployment issues",
-        help="Enter a general search query to find emails (e.g., 'show me all emails from Kushal related to AWS').",
-    )
-
-    if st.button("🔍 Find Relevant Emails", type="primary"):
-        st.session_state.threads = []
-        st.session_state.selected_thread_ids = []
-        st.session_state.analysis_result = None
-        st.session_state.dossier = None
-
-        if start_date > end_date:
-            st.error("❌ Error: Start date cannot be after end date.")
-        else:
-            # Check if at least one search parameter is provided
-            has_search_criteria = bool(keyword or email_id or query)
-            
-            if not has_search_criteria:
-                st.warning("⚠️ No search criteria provided. Searching all emails in the date range...")
-            
-            with st.spinner("🔄 Finding and filtering relevant email threads..."):
-                try:
-                    st.session_state.threads = find_relevant_threads(
-                        start_date=start_date.strftime("%Y/%m/%d"),
-                        end_date=end_date.strftime("%Y/%m/%d"),
-                        keyword=keyword if keyword else None,
-                        from_email=email_id if email_id else None,
-                        query=query if query else None,
-                    )
-                    if not st.session_state.threads:
-                        st.warning("⚠️ No relevant email threads found. Try adjusting your search criteria.")
-                except Exception as e:
-                    st.error(f"❌ An error occurred while finding emails: {str(e)}")
-
-# --- Main Content Area ---
-
-# Step 2: Thread Selection
-if st.session_state.threads:
-    st.header("Step 2: Select Threads to Analyze")
-    st.markdown("Select one or more email threads for analysis:")
+    # Add optional filters
+    if from_email:
+        search_query += f" from:{from_email}"
     
-    # Create checkboxes for each thread
-    for thread in st.session_state.threads:
-        thread_id = thread["id"]
-        thread_label = f"Subject: {thread['subject']} | From: {thread['sender']}"
+    # If a keyword is provided, it will search both subject and content by default in Gmail API
+    if keyword:
+        search_query += f" {keyword}"
+    
+    # The 'query' parameter is for general Gmail search syntax, which also searches content by default
+    if query:
+        search_query += f" {query}"
+
+    all_threads = list_email_threads(gmail_service, query=search_query)
+    if not all_threads:
+        print("No email threads found for the search criteria.")
+        return []
+
+    search_criteria = []
+    if keyword:
+        search_criteria.append(f"keyword \'{keyword}\' (subject and content)")
+    if from_email:
+        search_criteria.append(f"from \'{from_email}\'")
+    if query:
+        search_criteria.append(f"general query \'{query}\'")
+    
+    criteria_text = ", ".join(search_criteria) if search_criteria else "date range only"
+    print(f"Found {len(all_threads)} threads matching {criteria_text}...")
+
+    relevant_threads = []
+    for thread_meta in all_threads:
+        thread_id = thread_meta["id"]
+        subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
         
-        # Check if this thread is currently selected
-        is_selected = thread_id in st.session_state.selected_thread_ids
+        if subject and sender:
+            relevant_threads.append({"id": thread_id, "subject": subject, "sender": sender})
+
+    return relevant_threads
+
+def analyze_thread_content(thread_id: str):
+    """Analyzes the content of a single email thread."""
+    messages = get_email_thread(gmail_service, thread_id)
+    email_content = []
+    for msg in messages:
+        if "snippet" in msg:
+            email_content.append(msg["snippet"])
+        elif msg.get("payload", {}).get("parts"):
+            for part in msg["payload"]["parts"]:
+                if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+                    email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
+
+    full_email_thread_text = "\n".join(email_content)
+    
+    analysis_agent = agents.meeting_agenda_extractor()
+    
+    # --- THIS IS THE CRITICAL FIX ---
+    # We are making the prompt extremely strict to guarantee the output format.
+    task = Task(
+        description=(
+            "Analyze the provided email thread content. Your final answer MUST strictly follow this template, "
+            "filling in the details from the email. Do not add any other conversational text.\n\n"
+            "**Email Summaries:**\n"
+            "- [Summary of Email 1]\n"
+            "- [Summary of Email 2]\n\n"
+            "**Meeting Agenda:**\n"
+            "- [Extracted Meeting Agenda]\n\n"
+            "**Meeting Date & Time:**\n"
+            "- [Extracted Date and Time]\n\n"
+            "**Final Conclusion:**\n"
+            "- [Overall summary of the thread\'s conclusion]\n\n"
+            "**Product Name:** [The specific product name identified]\n"
+            "**Product Domain:** [The general domain of the product]\n\n"
+            f"--- EMAIL THREAD CONTENT ---\n{full_email_thread_text}"
+        ),
+        expected_output=(
+            "A structured summary that strictly follows the provided template, including the \'Product Name\' and \'Product Domain\' labels."
+        ),
+        agent=analysis_agent
+    )
+    # ---------------------------------
+
+    crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
+    analysis_output = crew.kickoff()
+
+    # This will now work because the output is forced to be in the correct format.
+    product_info = parse_product_info(analysis_output)
+    
+    return {
+        "analysis": str(analysis_output),
+        "product_name": product_info["product_name"],
+        "product_domain": product_info["product_domain"]
+    }
+
+def analyze_multiple_threads(thread_ids: list):
+    """Analyzes multiple email threads and combines their results."""
+    if not thread_ids:
+        return None
+    
+    # Collect all thread contents
+    all_thread_contents = []
+    all_subjects = []
+    
+    for thread_id in thread_ids:
+        messages = get_email_thread(gmail_service, thread_id)
+        subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
         
-        # Create checkbox
-        if st.checkbox(thread_label, value=is_selected, key=f"thread_{thread_id}"):
-            if thread_id not in st.session_state.selected_thread_ids:
-                st.session_state.selected_thread_ids.append(thread_id)
-        else:
-            if thread_id in st.session_state.selected_thread_ids:
-                st.session_state.selected_thread_ids.remove(thread_id)
+        email_content = []
+        for msg in messages:
+            if "snippet" in msg:
+                email_content.append(msg["snippet"])
+            elif msg.get("payload", {}).get("parts"):
+                for part in msg["payload"]["parts"]:
+                    if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+                        email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
+        
+        thread_text = "\n".join(email_content)
+        all_thread_contents.append(f"=== THREAD: {subject} ===\n{thread_text}")
+        all_subjects.append(subject)
     
-    # Show selected count
-    selected_count = len(st.session_state.selected_thread_ids)
-    if selected_count > 0:
-        st.info(f"✅ {selected_count} thread(s) selected")
-
-    if st.button("🔬 Analyze Selected Threads", disabled=selected_count == 0):
-        st.session_state.analysis_result = None # Reset previous results
-        st.session_state.dossier = None
-        with st.spinner(f"🔄 Analyzing {selected_count} email thread(s)..."):
-            try:
-                if selected_count == 1:
-                    # Single thread analysis
-                    result = analyze_thread_content(st.session_state.selected_thread_ids[0])
-                else:
-                    # Multiple threads analysis
-                    result = analyze_multiple_threads(st.session_state.selected_thread_ids)
-                st.session_state.analysis_result = result
-            except Exception as e:
-                st.error(f"❌ An error occurred during analysis: {str(e)}")
-
-# Step 3: Display Analysis and Generate Dossier
-if st.session_state.analysis_result:
-    thread_count = st.session_state.analysis_result.get("thread_count", 1)
-    st.header(f"📋 Analysis Result ({thread_count} thread{'s' if thread_count > 1 else ''})")
-    st.markdown("---")
+    # Combine all thread contents
+    combined_content = "\n\n".join(all_thread_contents)
     
-    # Display the analysis text
-    analysis_text = st.session_state.analysis_result.get("analysis", "No analysis content found.")
-    parsed_output = parse_crewai_output(analysis_text)
-    st.markdown(parsed_output)
-
-    st.header("Step 3: Generate Product Dossier")
-    product_name = st.session_state.analysis_result.get("product_name", "Unknown")
+    analysis_agent = agents.meeting_agenda_extractor()
     
-    if st.button(f"Generate Dossier for '{product_name}'"):
-        with st.spinner(f"📚 Creating dossier for {product_name}..."):
-            try:
-                dossier_output = generate_product_dossier(
-                    product_name=product_name,
-                    product_domain=st.session_state.analysis_result.get("product_domain", "general product"),
-                )
-                st.session_state.dossier = dossier_output
-            except Exception as e:
-                st.error(f"❌ An error occurred while generating the dossier: {str(e)}")
+    task = Task(
+        description=(
+            f"Analyze the provided {len(thread_ids)} email threads and create a comprehensive summary. "
+            "Your final answer MUST strictly follow this template, filling in the details from all the email threads. "
+            "Do not add any other conversational text.\n\n"
+            "**Thread Subjects:**\n"
+            f"{chr(10).join([f'- {subject}' for subject in all_subjects])}\n\n"
+            "**Combined Email Summaries:**\n"
+            "- [Summary of key emails across all threads]\n\n"
+            "**Consolidated Meeting Agenda:**\n"
+            "- [Combined meeting agenda items from all threads]\n\n"
+            "**Meeting Dates & Times:**\n"
+            "- [All extracted dates and times from all threads]\n\n"
+            "**Final Conclusion:**\n"
+            "- [Overall summary combining insights from all threads]\n\n"
+            "**Product Name:** [The main product name identified across threads]\n"
+            "**Product Domain:** [The general domain of the product]\n\n"
+            f"--- COMBINED EMAIL THREAD CONTENT ---\n{combined_content}"
+        ),
+        expected_output=(
+            "A structured summary that strictly follows the provided template, consolidating information from all email threads."
+        ),
+        agent=analysis_agent
+    )
 
-# Display Dossier
-if st.session_state.dossier:
-    st.header("📊 Product Dossier")
-    st.markdown("---")
-    parsed_dossier = parse_crewai_output(st.session_state.dossier)
-    st.markdown(parsed_dossier)
+    crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
+    analysis_output = crew.kickoff()
 
-# Footer
-st.markdown("---")
-st.markdown("*Powered by CrewAI, Gmail API, and Streamlit*")
+    product_info = parse_product_info(analysis_output)
+    
+    return {
+        "analysis": str(analysis_output),
+        "product_name": product_info["product_name"],
+        "product_domain": product_info["product_domain"],
+        "thread_count": len(thread_ids)
+    }
 
+def generate_product_dossier(product_name: str, product_domain: str):
+    """Generates a product dossier using a dedicated agent."""
+    dossier_agent = agents.product_dossier_creator(product_name, product_domain)
+    task = Task(
+        description=f"Create a comprehensive product dossier for \'{product_name}\' which is in the \'{product_domain}\' domain.",
+        expected_output=f"A detailed and well-structured product dossier for {product_name}.",
+        agent=dossier_agent,
+    )
 
+    crew = Crew(agents=[dossier_agent], tasks=[task], process=Process.sequential)
+    dossier_output = crew.kickoff()
+    
+    return str(dossier_output)
 
+# API Routes
+@app.route('/api/find_threads', methods=['POST'])
+def api_find_threads():
+    try:
+        data = request.get_json()
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        keyword = data.get('keyword')
+        from_email = data.get('from_email')
+        query = data.get('query')
+        
+        threads = find_relevant_threads(start_date, end_date, keyword, from_email, query)
+        return jsonify(threads)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analyze_thread', methods=['POST'])
+def api_analyze_thread():
+    try:
+        data = request.get_json()
+        thread_id = data.get('thread_id')
+        
+        if not thread_id:
+            return jsonify({'error': 'thread_id is required'}), 400
+        
+        result = analyze_thread_content(thread_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analyze_multiple_threads', methods=['POST'])
+def api_analyze_multiple_threads():
+    try:
+        data = request.get_json()
+        thread_ids = data.get('thread_ids', [])
+        
+        if not thread_ids:
+            return jsonify({'error': 'thread_ids array is required'}), 400
+        
+        result = analyze_multiple_threads(thread_ids)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/generate_dossier', methods=['POST'])
+def api_generate_dossier():
+    try:
+        data = request.get_json()
+        product_name = data.get('product_name')
+        product_domain = data.get('product_domain')
+        
+        if not product_name or not product_domain:
+            return jsonify({'error': 'product_name and product_domain are required'}), 400
+        
+        dossier = generate_product_dossier(product_name, product_domain)
+        return jsonify({'dossier': dossier})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
