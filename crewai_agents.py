@@ -1,22 +1,25 @@
-from crewai import Agent #type:ignore
+from crewai import Agent
 
 class MeetingAgents:
-    def __init__(self, llm):
-        self.llm = llm
+    def __init__(self, azure_llm):
+        self.azure_llm = azure_llm
 
-    def email_triage_agent(self):
+    def email_triage_agent(self, business_requirements: str):
         return Agent(
             role="Relevance Analyst",
             goal=(
-                "Strictly analyze an email subject for relevance to a business requirement. "
-                "Your ONLY job is to output a single word: YES or NO. Nothing else."
+                f"Analyze the email subject and body for relevance to the following "
+                f"business requirements: '{business_requirements}'. Output 'YES' if "
+                "highly relevant, 'NO' if not relevant. Consider keywords, intent, urgency, "
+                "and any context in the body."
             ),
             backstory=(
-                "You are a hyper-efficient routing machine. You do not converse. You do not explain. "
-                "You read a subject and a department, and you output 'YES' or 'NO'. "
-                "You are evaluated on your ability to follow this single, critical instruction without fail."
+                "You are a hyper-efficient routing machine. Your sole purpose is to triage "
+                "emails with extreme precision. You must provide a definitive 'YES' or 'NO' "
+                "based on strict relevance criteria to the provided business requirements. "
+                "No other text, explanations, or punctuation are allowed."
             ),
-            llm=self.llm,
+            llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
@@ -25,16 +28,12 @@ class MeetingAgents:
         return Agent(
             role="Email Thread Content Analyst",
             goal=(
-                "Analyze the full content of an email thread to extract key information: "
-                "a sequential summary of each email, any meeting agendas with dates/times, a final conclusion, "
-                "and the name and domain of the product being discussed."
+                "Analyze an email thread to extract summaries, agenda, date/time, "
+                "Include each and every email's summary present in the thread."
+                "final conclusion, and product details."
             ),
-            backstory=(
-                "A meticulous analyst who specializes in dissecting email conversations. "
-                "You are an expert at understanding context, identifying actionable items, and summarizing complex discussions "
-                "into structured, easy-to-digest formats."
-            ),
-            llm=self.llm,
+            backstory="You are a meticulous analyst specializing in email content extraction.",
+            llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
@@ -43,17 +42,12 @@ class MeetingAgents:
         return Agent(
             role="Product Research Analyst",
             goal=(
-                f"Create a detailed dossier about the product '{product_name}', "
-                f"which is a {product_domain if product_domain else 'general product'}. "
-                "The dossier should include general industry knowledge, features, benefits, potential use cases, "
-                "and comparisons to similar products. Use only your internal knowledge—do not refer to external documents."
+                f"Create a detailed dossier about '{product_name}', a {product_domain}. "
+                "Include industry knowledge, features, benefits, use cases, and comparisons. "
+                "Use internal knowledge only."
             ),
-            backstory=(
-                "A seasoned product research expert who crafts professional dossiers for strategic planning, "
-                "sales meetings, or investor pitches. Relies solely on internal knowledge and reasoning."
-            ),
-            llm=self.llm,
+            backstory="A seasoned researcher who creates high-quality product dossiers.",
+            llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
-

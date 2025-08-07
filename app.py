@@ -3,84 +3,101 @@ import base64
 import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv #type:ignore
-from crewai import Crew, Process, Task #type:ignore
-from langchain_groq import ChatGroq #type:ignore
+from dotenv import load_dotenv
 
-from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
+from crewai import Crew, Process, Task, LLM
 from crewai_agents import MeetingAgents
+from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
 
-# --- Setup ---
+# --- Load .env variables ---
 load_dotenv()
-# --- MODEL CHANGE ---
-# Switched to a model known for strong instruction-following.
-llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="groq/deepseek-r1-distill-llama-70b") 
-# --------------------
-gmail_service = get_gmail_service()
-agents = MeetingAgents(llm=llm)
 
-# Flask app setup
+# --- LiteLLM / CrewAI Azure LLM Setup ---
+# Must set LiteLLM-compatible env vars:
+os.environ["AZURE_API_KEY"] = os.getenv("AZURE_OPENAI_KEY", "")
+os.environ["AZURE_API_BASE"] = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+os.environ["AZURE_API_VERSION"] = os.getenv("AZURE_OPENAI_API_VERSION", "")
+
+azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
+llm = LLM(
+    api_key=os.getenv("AZURE_OPENAI_KEY"),
+    model=f"azure/{azure_deployment}"
+)
+
+# --- Agents Setup ---
+agents = MeetingAgents(llm)
+
+# --- Gmail Service ---
+gmail_service = get_gmail_service()
+
+# --- Flask app setup ---
 app = Flask(__name__)
 CORS(app)
 
-# --- Helper function to parse agent output ---
+# --- Helper: Ask Azure ---
+def ask_azure_openai(prompt: str):
+    # CrewAI's LLM is based on LiteLLM, so we use its invoke-style interface
+    return llm.complete(messages=[{"role": "user", "content": prompt}]).choices[0]["message"]["content"]
+
 def parse_product_info(text: str):
-    # This regex is more robust to find the labels even with markdown
     product_name_match = re.search(r"Product Name:\s*\**(.+?)\**\s*$", str(text), re.MULTILINE)
     product_domain_match = re.search(r"Product Domain:\s*\**(.+?)\**\s*$", str(text), re.MULTILINE)
-    
+
     return {
         "product_name": product_name_match.group(1).strip() if product_name_match else "Unknown Product",
         "product_domain": product_domain_match.group(1).strip() if product_domain_match else "general product"
     }
 
-# --- Core Functions ---
-
 def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
-    """Finds and filters email threads based on keyword, sender, or general query search."""
-    # Build the base query with date range
-    search_query = f"after:{start_date} before:{end_date}"
-    
-    # Add optional filters
+    search_parts = [f"after:{start_date} before:{end_date}"]
     if from_email:
-        search_query += f" from:{from_email}"
-    
-    # If a keyword is provided, it will search both subject and content by default in Gmail API
+        search_parts.append(f"from:{from_email}")
     if keyword:
-        search_query += f" {keyword}"
-    
-    # The 'query' parameter is for general Gmail search syntax, which also searches content by default
+        search_parts.append(f'"{keyword}"')
     if query:
-        search_query += f" {query}"
+        search_parts.append(query)
 
+    search_query = " ".join(search_parts)
     all_threads = list_email_threads(gmail_service, query=search_query)
     if not all_threads:
-        print("No email threads found for the search criteria.")
+        print("No email threads found for the criteria.")
         return []
 
-    search_criteria = []
-    if keyword:
-        search_criteria.append(f"keyword \'{keyword}\' (subject and content)")
-    if from_email:
-        search_criteria.append(f"from \'{from_email}\'")
-    if query:
-        search_criteria.append(f"general query \'{query}\'")
-    
-    criteria_text = ", ".join(search_criteria) if search_criteria else "date range only"
-    print(f"Found {len(all_threads)} threads matching {criteria_text}...")
-
     relevant_threads = []
+    triage_agent = agents.email_triage_agent(keyword) if keyword else None
+
     for thread_meta in all_threads:
         thread_id = thread_meta["id"]
         subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
-        
+        messages = get_email_thread(gmail_service, thread_id)
+        body = ""
+        if messages:
+            msg = messages[0]
+            if "snippet" in msg:
+                body = msg["snippet"]
+            elif msg.get("payload", {}).get("parts"):
+                for part in msg["payload"]["parts"]:
+                    if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+                        body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
+                        break
+
+        if triage_agent:
+            triage_task = Task(
+                description=f"Decide if this email is relevant to '{keyword}':\n\nSubject: {subject}\n\nBody: {body}",
+                expected_output="YES or NO",
+                agent=triage_agent
+            )
+            crew = Crew(agents=[triage_agent], tasks=[triage_task], process=Process.sequential)
+            outcome = str(crew.kickoff()).strip().upper()
+            if "NO" in outcome:
+                continue
+
         if subject and sender:
-            relevant_threads.append({"id": thread_id, "subject": subject, "sender": sender})
+            relevant_threads.append({"id": thread_id, "subject": subject, "sender": sender, "body": body})
 
     return relevant_threads
 
 def analyze_thread_content(thread_id: str):
-    """Analyzes the content of a single email thread."""
     messages = get_email_thread(gmail_service, thread_id)
     email_content = []
     for msg in messages:
@@ -92,15 +109,12 @@ def analyze_thread_content(thread_id: str):
                     email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
 
     full_email_thread_text = "\n".join(email_content)
-    
+
     analysis_agent = agents.meeting_agenda_extractor()
-    
-    # --- THIS IS THE CRITICAL FIX ---
-    # We are making the prompt extremely strict to guarantee the output format.
+
     task = Task(
         description=(
-            "Analyze the provided email thread content. Your final answer MUST strictly follow this template, "
-            "filling in the details from the email. Do not add any other conversational text.\n\n"
+            "Analyze the provided email thread content. Your final answer MUST strictly follow this template:\n\n"
             "**Email Summaries:**\n"
             "- [Summary of Email 1]\n"
             "- [Summary of Email 2]\n\n"
@@ -109,43 +123,40 @@ def analyze_thread_content(thread_id: str):
             "**Meeting Date & Time:**\n"
             "- [Extracted Date and Time]\n\n"
             "**Final Conclusion:**\n"
-            "- [Overall summary of the thread\'s conclusion]\n\n"
+            "- [Overall summary of the thread's conclusion]\n\n"
             "**Product Name:** [The specific product name identified]\n"
             "**Product Domain:** [The general domain of the product]\n\n"
             f"--- EMAIL THREAD CONTENT ---\n{full_email_thread_text}"
         ),
         expected_output=(
-            "A structured summary that strictly follows the provided template, including the \'Product Name\' and \'Product Domain\' labels."
+            "A structured summary that strictly follows the provided template, including the 'Product Name' and 'Product Domain' labels."
         ),
         agent=analysis_agent
     )
-    # ---------------------------------
 
     crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
     analysis_output = crew.kickoff()
 
-    # This will now work because the output is forced to be in the correct format.
     product_info = parse_product_info(analysis_output)
-    
+
     return {
         "analysis": str(analysis_output),
         "product_name": product_info["product_name"],
         "product_domain": product_info["product_domain"]
     }
 
+
 def analyze_multiple_threads(thread_ids: list):
-    """Analyzes multiple email threads and combines their results."""
     if not thread_ids:
         return None
-    
-    # Collect all thread contents
+
     all_thread_contents = []
     all_subjects = []
-    
+
     for thread_id in thread_ids:
         messages = get_email_thread(gmail_service, thread_id)
         subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
-        
+
         email_content = []
         for msg in messages:
             if "snippet" in msg:
@@ -154,21 +165,18 @@ def analyze_multiple_threads(thread_ids: list):
                 for part in msg["payload"]["parts"]:
                     if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
                         email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
-        
+
         thread_text = "\n".join(email_content)
         all_thread_contents.append(f"=== THREAD: {subject} ===\n{thread_text}")
         all_subjects.append(subject)
-    
-    # Combine all thread contents
+
     combined_content = "\n\n".join(all_thread_contents)
-    
     analysis_agent = agents.meeting_agenda_extractor()
-    
+
     task = Task(
         description=(
             f"Analyze the provided {len(thread_ids)} email threads and create a comprehensive summary. "
-            "Your final answer MUST strictly follow this template, filling in the details from all the email threads. "
-            "Do not add any other conversational text.\n\n"
+            "Your final answer MUST strictly follow this template:\n\n"
             "**Thread Subjects:**\n"
             f"{chr(10).join([f'- {subject}' for subject in all_subjects])}\n\n"
             "**Combined Email Summaries:**\n"
@@ -183,9 +191,7 @@ def analyze_multiple_threads(thread_ids: list):
             "**Product Domain:** [The general domain of the product]\n\n"
             f"--- COMBINED EMAIL THREAD CONTENT ---\n{combined_content}"
         ),
-        expected_output=(
-            "A structured summary that strictly follows the provided template, consolidating information from all email threads."
-        ),
+        expected_output="A structured summary that strictly follows the provided template, consolidating information from all email threads.",
         agent=analysis_agent
     )
 
@@ -193,7 +199,7 @@ def analyze_multiple_threads(thread_ids: list):
     analysis_output = crew.kickoff()
 
     product_info = parse_product_info(analysis_output)
-    
+
     return {
         "analysis": str(analysis_output),
         "product_name": product_info["product_name"],
@@ -201,82 +207,101 @@ def analyze_multiple_threads(thread_ids: list):
         "thread_count": len(thread_ids)
     }
 
+
 def generate_product_dossier(product_name: str, product_domain: str):
-    """Generates a product dossier using a dedicated agent."""
     dossier_agent = agents.product_dossier_creator(product_name, product_domain)
     task = Task(
         description=f"Create a comprehensive product dossier for \'{product_name}\' which is in the \'{product_domain}\' domain.",
         expected_output=f"A detailed and well-structured product dossier for {product_name}.",
         agent=dossier_agent,
     )
-
     crew = Crew(agents=[dossier_agent], tasks=[task], process=Process.sequential)
     dossier_output = crew.kickoff()
-    
-    return str(dossier_output)
 
-# API Routes
-@app.route('/api/find_threads', methods=['POST'])
+    return {
+        "dossier": str(dossier_output)
+    }
+
+
+# --- API Routes ---
+@app.route("/api/find_threads", methods=["POST"])
 def api_find_threads():
     try:
+        print("Received find_threads request")  # Debug
         data = request.get_json()
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        keyword = data.get('keyword')
-        from_email = data.get('from_email')
-        query = data.get('query')
-        
-        threads = find_relevant_threads(start_date, end_date, keyword, from_email, query)
+        print(f"Data: {data}")  # Debug
+        threads = find_relevant_threads(
+            start_date=data.get('start_date'),
+            end_date=data.get('end_date'),
+            keyword=data.get('keyword'),
+            from_email=data.get('from_email'),
+            query=data.get('query')
+        )
+        print(f"Found {len(threads)} threads")  # Debug
         return jsonify(threads)
     except Exception as e:
+        print(f"Error in find_threads: {e}")  # Debug
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/analyze_thread', methods=['POST'])
+@app.route("/api/analyze_thread", methods=["POST"])
 def api_analyze_thread():
     try:
         data = request.get_json()
         thread_id = data.get('thread_id')
-        
         if not thread_id:
             return jsonify({'error': 'thread_id is required'}), 400
-        
         result = analyze_thread_content(thread_id)
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/analyze_multiple_threads', methods=['POST'])
+
+@app.route("/api/analyze_multiple_threads", methods=["POST"])
 def api_analyze_multiple_threads():
     try:
         data = request.get_json()
         thread_ids = data.get('thread_ids', [])
-        
         if not thread_ids:
-            return jsonify({'error': 'thread_ids array is required'}), 400
-        
+                return jsonify({'error': 'thread_ids array is required'}), 400
         result = analyze_multiple_threads(thread_ids)
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/generate_dossier', methods=['POST'])
+
+@app.route("/api/generate_dossier", methods=["POST"])
 def api_generate_dossier():
     try:
         data = request.get_json()
         product_name = data.get('product_name')
         product_domain = data.get('product_domain')
-        
         if not product_name or not product_domain:
             return jsonify({'error': 'product_name and product_domain are required'}), 400
-        
         dossier = generate_product_dossier(product_name, product_domain)
-        return jsonify({'dossier': dossier})
+        return jsonify(dossier)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/health', methods=['GET'])
+
+@app.route("/api/azure_ask", methods=["POST"])
+def api_azure_ask():
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt')
+        if not prompt:
+            return jsonify({'error': 'prompt is required'}), 400
+        result = ask_azure_openai(prompt)
+        return jsonify({
+            'response': result
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/health", methods=["GET"])
 def health_check():
-    return jsonify({'status': 'healthy'})
+    return jsonify({'status': 'healthy'}) 
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

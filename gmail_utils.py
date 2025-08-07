@@ -8,23 +8,36 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 def get_gmail_service( ):
     creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    token_path = os.path.join(script_dir, "token.json")
+    credentials_path = os.path.join(script_dir, "credentials.json")
+    
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            if not os.path.exists(credentials_path):
+                raise FileNotFoundError(f"credentials.json not found at {credentials_path}")
+            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as token:
+        with open(token_path, "w") as token:
             token.write(creds.to_json())
     service = build("gmail", "v1", credentials=creds)
     return service
 
-def list_email_threads(service, query=""):
+def list_email_threads(service, query="", max_results=100):
     """Lists all threads matching the query."""
-    results = service.users().threads().list(userId="me", q=query, includeSpamTrash=False).execute()
-    threads = results.get("threads", [])
+    threads = []
+    page_token = None
+    while True:
+        results = service.users().threads().list(userId="me", q=query, includeSpamTrash=False, pageToken=page_token, maxResults=max_results).execute()
+        threads.extend(results.get("threads", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
     return threads
 
 def get_email_thread(service, thread_id):
@@ -48,3 +61,5 @@ def get_thread_subject_and_sender(service, thread_id):
     except Exception as e:
         print(f"Error fetching metadata for thread {thread_id}: {e}")
         return None, None
+
+
