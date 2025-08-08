@@ -8,16 +8,14 @@ class MeetingAgents:
         return Agent(
             role="Relevance Analyst",
             goal=(
-                f"Analyze the email subject and body for relevance to the following "
-                f"business requirements: '{business_requirements}'. Output 'YES' if "
-                "highly relevant, 'NO' if not relevant. Consider keywords, intent, urgency, "
-                "and any context in the body."
+                f"Decide if the email is truly about the product/service/concept '{business_requirements}', "
+                "including its reasonable variations, abbreviations, informal names, and closely related references. "
+                "Use context and intent, not exact string match. If clearly about the same thing: output 'YES'. "
+                "If different or coincidental mention: output 'NO'."
             ),
             backstory=(
-                "You are a hyper-efficient routing machine. Your sole purpose is to triage "
-                "emails with extreme precision. You must provide a definitive 'YES' or 'NO' "
-                "based on strict relevance criteria to the provided business requirements. "
-                "No other text, explanations, or punctuation are allowed."
+                "You are a precise email triager. Respond with 'YES' or 'NO' as the first token, "
+                "optionally followed by a short rationale (one sentence)."
             ),
             llm=self.azure_llm,
             verbose=True,

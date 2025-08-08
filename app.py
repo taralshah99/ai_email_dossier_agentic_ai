@@ -1,6 +1,8 @@
 import os
 import base64
 import re
+import json
+from typing import List, Tuple
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -8,6 +10,7 @@ from dotenv import load_dotenv
 from crewai import Crew, Process, Task, LLM
 from crewai_agents import MeetingAgents
 from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
+import requests
 
 # --- Load .env variables ---
 load_dotenv()
@@ -168,53 +171,206 @@ def structure_analysis_output(text: str) -> dict:
 
     return structured
 
-def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
-    search_parts = [f"after:{start_date} before:{end_date}"]
-    if from_email:
-        search_parts.append(f"from:{from_email}")
-    if keyword:
-        search_parts.append(f'"{keyword}"')
-    if query:
-        search_parts.append(query)
 
-    search_query = " ".join(search_parts)
+# --- Aliases / Embeddings Utilities ---
+def expand_keyword_aliases(keyword: str) -> List[str]:
+    """Generate likely variations/abbreviations for the keyword via a lightweight prompt.
+
+    Returns a deduplicated list including the original keyword, trimmed.
+    """
+    base = (keyword or "").strip()
+    if not base:
+        return []
+    prompt = (
+        "Given the term '" + base + "', list 5-10 likely variations, abbreviations, and informal names. "
+        "Return one per line without numbering or extra text."
+    )
+    try:
+        raw = ask_azure_openai(prompt)
+        lines = [l.strip().strip("-•*") for l in str(raw).splitlines()]
+        aliases = [a for a in lines if a]
+    except Exception:
+        aliases = []
+
+    # Add simple orthographic variants heuristically
+    variants = set([base])
+    for a in aliases + [base]:
+        if not a:
+            continue
+        variants.add(a)
+        variants.add(a.replace("-", " "))
+        variants.add(a.replace(" ", ""))
+        variants.add(a.replace(" ", "-") )
+    # Deduplicate while preserving order
+    seen = set()
+    ordered = []
+    for v in variants:
+        v2 = v.strip()
+        if v2 and v2.lower() not in seen:
+            seen.add(v2.lower())
+            ordered.append(v2)
+    return ordered
+
+
+def _azure_embeddings_available() -> bool:
+    return bool(os.getenv("AZURE_OPENAI_ENDPOINT") and os.getenv("AZURE_OPENAI_API_VERSION") and os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"))
+
+
+def get_azure_embeddings(texts: List[str]) -> List[List[float]]:
+    """Call Azure OpenAI embeddings endpoint for a batch of texts. Returns list of vectors.
+    Requires env AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT.
+    """
+    if not texts:
+        return []
+    if not _azure_embeddings_available():
+        raise RuntimeError("Azure embeddings not configured (set AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT)")
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT").rstrip("/")
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION")
+    deployment = os.environ.get("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT")
+    url = f"{endpoint}/openai/deployments/{deployment}/embeddings?api-version={api_version}"
+    headers = {
+        "api-key": os.environ.get("AZURE_OPENAI_KEY", ""),
+        "Content-Type": "application/json",
+    }
+    payload = {"input": texts}
+    resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    vectors = [d["embedding"] for d in data.get("data", [])]
+    if len(vectors) != len(texts):
+        # Attempt to align; pad/truncate to match
+        while len(vectors) < len(texts):
+            vectors.append(vectors[-1] if vectors else [])
+        vectors = vectors[: len(texts)]
+    return vectors
+
+
+def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = sum(a * a for a in vec_a) ** 0.5
+    norm_b = sum(b * b for b in vec_b) ** 0.5
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
+    """Smart relevancy finder with exact-phrase Gmail queries, embeddings pre-filter, and AI triage.
+
+    - No OR tokenization: we query Gmail separately per alias phrase and union thread IDs
+    - Embeddings: semantic pre-filter on subject + snippet/body
+    - AI triage: final YES/NO with context awareness of aliases
+    """
     service = ensure_gmail_service()
-    all_threads = list_email_threads(service, query=search_query)
-    if not all_threads:
-        print("No email threads found for the criteria.")
+
+    # 1) Build alias phrases (exact phrases only)
+    aliases = expand_keyword_aliases(keyword) if keyword else []
+    alias_phrases = aliases if aliases else ([keyword] if keyword else [])
+
+    # 2) Run separate Gmail searches per alias phrase; union thread IDs
+    thread_ids = set()
+    for phrase in alias_phrases if alias_phrases else [None]:
+        search_parts = [f"after:{start_date} before:{end_date}"]
+        if from_email:
+            search_parts.append(f"from:{from_email}")
+        if phrase:
+            # exact phrase; quote if contains spaces
+            if " " in phrase:
+                search_parts.append(f'"{phrase}"')
+            else:
+                search_parts.append(phrase)
+        if query:
+            search_parts.append(query)
+        search_query = " ".join(search_parts)
+        threads_page = list_email_threads(service, query=search_query)
+        for t in threads_page:
+            if t.get("id"):
+                thread_ids.add(t["id"])
+
+    if not thread_ids:
         return []
 
-    relevant_threads = []
-    triage_agent = agents.email_triage_agent(keyword) if keyword else None
-
-    for thread_meta in all_threads:
-        thread_id = thread_meta["id"]
+    # Fetch lightweight info for all unique threads
+    candidates = []
+    for thread_id in thread_ids:
         subject, sender = get_thread_subject_and_sender(service, thread_id)
         messages = get_email_thread(service, thread_id)
-        body = ""
+        snippet = ""
         if messages:
             msg = messages[0]
             if "snippet" in msg:
-                body = msg["snippet"]
+                snippet = msg["snippet"]
             elif msg.get("payload", {}).get("parts"):
                 for part in msg["payload"]["parts"]:
                     if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                        body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
+                        snippet = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
                         break
+        candidates.append({
+            "id": thread_id,
+            "subject": subject or "",
+            "sender": sender or "",
+            "text": f"{subject or ''}\n{snippet or ''}".strip()
+        })
 
+    # 3) Embeddings semantic pre-filter
+    kept = candidates
+    try:
+        if alias_phrases and _azure_embeddings_available():
+            # Compute embeddings for queries and candidates
+            query_vectors = get_azure_embeddings(alias_phrases)
+            doc_vectors = get_azure_embeddings([c["text"] for c in candidates])
+
+            scored = []
+            for c, dv in zip(candidates, doc_vectors):
+                max_sim = max((cosine_similarity(dv, qv) for qv in query_vectors), default=0.0)
+                c["semantic_score"] = max_sim
+                scored.append(c)
+
+            # Threshold/top-k filter
+            threshold = float(os.getenv("SEMANTIC_SIM_THRESHOLD", "0.75"))
+            top_k = int(os.getenv("SEMANTIC_TOP_K", "60"))
+            scored.sort(key=lambda x: x.get("semantic_score", 0.0), reverse=True)
+            kept = [s for s in scored if s.get("semantic_score", 0.0) >= threshold][:top_k]
+    except Exception as e:
+        # If embeddings fail, proceed without semantic filter
+        print(f"Embeddings step failed, continuing without semantic filter: {e}")
+        kept = candidates
+
+    # 4) AI triage with alias context (only on the kept subset)
+    relevant_threads = []
+    if keyword:
+        triage_agent = agents.email_triage_agent(keyword)
+    else:
+        triage_agent = None
+
+    for c in kept:
+        subject = c["subject"]
+        text = c["text"]
         if triage_agent:
+            alias_hint = ", ".join(alias_phrases[:8])
+            sim_hint = f"Similarity: {c.get('semantic_score', 0.0):.2f}" if "semantic_score" in c else ""
+            triage_desc = (
+                f"Determine if this email is about '{keyword}' or its variations.\n"
+                f"Known aliases: {alias_hint}\n{sim_hint}\n\n"
+                f"Subject: {subject}\n\nBody Excerpt: {text[:1500]}"
+            )
             triage_task = Task(
-                description=f"Decide if this email is relevant to '{keyword}':\n\nSubject: {subject}\n\nBody: {body}",
+                description=triage_desc,
                 expected_output="YES or NO",
                 agent=triage_agent
             )
             crew = Crew(agents=[triage_agent], tasks=[triage_task], process=Process.sequential)
             outcome = str(crew.kickoff()).strip().upper()
-            if "NO" in outcome:
+            if outcome.startswith("NO"):
                 continue
 
-        if subject and sender:
-            relevant_threads.append({"id": thread_id, "subject": subject, "sender": sender, "body": body})
+        relevant_threads.append({
+            "id": c["id"],
+            "subject": subject or "No Subject",
+            "sender": c["sender"] or "Unknown Sender",
+            "body": c["text"]
+        })
 
     return relevant_threads
 
