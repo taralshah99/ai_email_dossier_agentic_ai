@@ -481,7 +481,10 @@ function App() {
         )}
 
         {analysisResults && (
-          <AnalysisReport analysis={analysisResults.analysis} />
+          <AnalysisReport
+            structuredAnalysis={analysisResults.structured_analysis}
+            rawAnalysis={analysisResults.analysis}
+          />
         )}
       </MainContent>
     </AppContainer>

@@ -27,8 +27,22 @@ llm = LLM(
 # --- Agents Setup ---
 agents = MeetingAgents(llm)
 
-# --- Gmail Service ---
-gmail_service = get_gmail_service()
+# --- Gmail Service (lazy init to avoid startup crash if creds missing) ---
+gmail_service = None
+gmail_service_error = None
+
+def ensure_gmail_service():
+    global gmail_service, gmail_service_error
+    if gmail_service is None and gmail_service_error is None:
+        try:
+            gmail_service = get_gmail_service()
+        except Exception as e:
+            gmail_service_error = str(e)
+    if gmail_service is None:
+        raise RuntimeError(
+            f"Gmail service is not configured: {gmail_service_error or 'Unknown error. Ensure credentials.json exists and OAuth consent is completed.'}"
+        )
+    return gmail_service
 
 # --- Flask app setup ---
 app = Flask(__name__)
@@ -48,6 +62,112 @@ def parse_product_info(text: str):
         "product_domain": product_domain_match.group(1).strip() if product_domain_match else "general product"
     }
 
+
+def _extract_section(text: str, header_variants: list[str]) -> str:
+    """Return raw section content between a header and the next header or end.
+
+    header_variants: list of header strings without surrounding asterisks/colons normalization.
+    Matches forms like '**Header:**' optionally with trailing/leading spaces.
+    """
+    if not text:
+        return ""
+
+    # Build a regex to match any of the header variants in bold markdown style
+    header_regexes = [
+        pattern
+        for h in header_variants
+        for pattern in [
+            rf"\*\*{re.escape(h)}\s*:\*\*",
+            rf"\*\*{re.escape(h)}\s*:\s*",
+            rf"{re.escape(h)}\s*:\s*",  # fallback without bold
+        ]
+    ]
+    combined_header_pattern = "|".join([f"(?:{p})" for p in header_regexes])
+
+    # Find start of section
+    match = re.search(combined_header_pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+
+    start_idx = match.end()
+
+    # Find the next bold header '**...:**' after start
+    next_header_match = re.search(r"\n\s*\*\*[^\n]+?:\*\*", text[start_idx:], flags=re.IGNORECASE)
+    if next_header_match:
+        end_idx = start_idx + next_header_match.start()
+    else:
+        end_idx = len(text)
+
+    section_text = text[start_idx:end_idx].strip()
+    return section_text
+
+
+def _parse_bullets(section_text: str) -> list[str]:
+    """Parse lines that look like bullets ('- ...' or numbered) into a list of strings."""
+    if not section_text:
+        return []
+    lines = section_text.splitlines()
+    bullets: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        # Accept '- foo', '* foo', '1. foo'
+        bullet_match = re.match(r"^(?:[-\*]\s+|\d+\.\u00a0?|\d+\.\s+)(.+)$", line)
+        if bullet_match:
+            item = bullet_match.group(1).strip()
+        else:
+            # If the whole section isn't bulleted, treat each non-empty line as an item
+            item = line
+
+        # Normalize prefixes like 'Email 1: '
+        item = re.sub(r"^Email\s*\d+\s*:\s*", "", item, flags=re.IGNORECASE)
+        bullets.append(item)
+    return bullets
+
+
+def structure_analysis_output(text: str) -> dict:
+    """Convert the model's markdown-like output into a structured schema.
+
+    Returns keys:
+    - email_summaries: list[str]
+    - meeting_agenda: list[str]
+    - meeting_date_time: list[str]
+    - final_conclusion: str
+    - product_name: str
+    - product_domain: str
+
+    Also supports multi-thread variants like 'Thread Subjects', 'Combined Email Summaries', etc.
+    """
+    text = str(text or "")
+
+    # Sections (single-thread template)
+    email_summaries_raw = _extract_section(text, ["Email Summaries"])
+    meeting_agenda_raw = _extract_section(text, ["Meeting Agenda", "Consolidated Meeting Agenda"])
+    meeting_dt_raw = _extract_section(text, ["Meeting Date & Time", "Meeting Dates & Times"])
+    conclusion_raw = _extract_section(text, ["Final Conclusion"])
+
+    # Multi-thread optional sections
+    thread_subjects_raw = _extract_section(text, ["Thread Subjects"]) or ""
+    combined_summaries_raw = _extract_section(text, ["Combined Email Summaries"]) or email_summaries_raw
+
+    structured = {
+        "thread_subjects": _parse_bullets(thread_subjects_raw) if thread_subjects_raw else [],
+        "email_summaries": _parse_bullets(combined_summaries_raw),
+        "meeting_agenda": _parse_bullets(meeting_agenda_raw),
+        "meeting_date_time": _parse_bullets(meeting_dt_raw),
+        "final_conclusion": conclusion_raw.strip() if conclusion_raw else "",
+    }
+
+    # Attach product info
+    product = parse_product_info(text)
+    structured.update({
+        "product_name": product["product_name"],
+        "product_domain": product["product_domain"],
+    })
+
+    return structured
+
 def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
     search_parts = [f"after:{start_date} before:{end_date}"]
     if from_email:
@@ -58,7 +178,8 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
         search_parts.append(query)
 
     search_query = " ".join(search_parts)
-    all_threads = list_email_threads(gmail_service, query=search_query)
+    service = ensure_gmail_service()
+    all_threads = list_email_threads(service, query=search_query)
     if not all_threads:
         print("No email threads found for the criteria.")
         return []
@@ -68,8 +189,8 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
 
     for thread_meta in all_threads:
         thread_id = thread_meta["id"]
-        subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
-        messages = get_email_thread(gmail_service, thread_id)
+        subject, sender = get_thread_subject_and_sender(service, thread_id)
+        messages = get_email_thread(service, thread_id)
         body = ""
         if messages:
             msg = messages[0]
@@ -98,7 +219,8 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
     return relevant_threads
 
 def analyze_thread_content(thread_id: str):
-    messages = get_email_thread(gmail_service, thread_id)
+    service = ensure_gmail_service()
+    messages = get_email_thread(service, thread_id)
     email_content = []
     for msg in messages:
         if "snippet" in msg:
@@ -141,6 +263,7 @@ def analyze_thread_content(thread_id: str):
 
     return {
         "analysis": str(analysis_output),
+        "structured_analysis": structure_analysis_output(analysis_output),
         "product_name": product_info["product_name"],
         "product_domain": product_info["product_domain"]
     }
@@ -153,9 +276,10 @@ def analyze_multiple_threads(thread_ids: list):
     all_thread_contents = []
     all_subjects = []
 
+    service = ensure_gmail_service()
     for thread_id in thread_ids:
-        messages = get_email_thread(gmail_service, thread_id)
-        subject, sender = get_thread_subject_and_sender(gmail_service, thread_id)
+        messages = get_email_thread(service, thread_id)
+        subject, sender = get_thread_subject_and_sender(service, thread_id)
 
         email_content = []
         for msg in messages:
@@ -202,6 +326,7 @@ def analyze_multiple_threads(thread_ids: list):
 
     return {
         "analysis": str(analysis_output),
+        "structured_analysis": structure_analysis_output(analysis_output),
         "product_name": product_info["product_name"],
         "product_domain": product_info["product_domain"],
         "thread_count": len(thread_ids)
@@ -230,6 +355,11 @@ def api_find_threads():
         print("Received find_threads request")  # Debug
         data = request.get_json()
         print(f"Data: {data}")  # Debug
+        # Ensure Gmail is configured before proceeding
+        try:
+            ensure_gmail_service()
+        except Exception as ge:
+            return jsonify({'error': str(ge), 'code': 'GMAIL_NOT_CONFIGURED'}), 400
         threads = find_relevant_threads(
             start_date=data.get('start_date'),
             end_date=data.get('end_date'),
@@ -250,6 +380,10 @@ def api_analyze_thread():
         thread_id = data.get('thread_id')
         if not thread_id:
             return jsonify({'error': 'thread_id is required'}), 400
+        try:
+            ensure_gmail_service()
+        except Exception as ge:
+            return jsonify({'error': str(ge), 'code': 'GMAIL_NOT_CONFIGURED'}), 400
         result = analyze_thread_content(thread_id)
         return jsonify(result)
     except Exception as e:
@@ -263,6 +397,10 @@ def api_analyze_multiple_threads():
         thread_ids = data.get('thread_ids', [])
         if not thread_ids:
                 return jsonify({'error': 'thread_ids array is required'}), 400
+        try:
+            ensure_gmail_service()
+        except Exception as ge:
+            return jsonify({'error': str(ge), 'code': 'GMAIL_NOT_CONFIGURED'}), 400
         result = analyze_multiple_threads(thread_ids)
         return jsonify(result)
     except Exception as e:

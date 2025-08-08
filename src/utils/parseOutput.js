@@ -6,7 +6,7 @@
 export function parseCrewAIOutput(text) {
   if (!text) return '';
   
-  // Convert the text to a string if it's not already
+  // Convert the text to a string if it's not already 
   const textStr = String(text);
   
   // Replace markdown-style headers with HTML

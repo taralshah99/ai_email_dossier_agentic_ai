@@ -63,24 +63,87 @@ const SectionTitle = styled.h3`
   margin: 0 0 12px 0;
 `;
 
-function AnalysisReport({ analysis }) {
-  if (!analysis) return null;
+function AnalysisReport({ structuredAnalysis, rawAnalysis }) {
+  const hasStructured = structuredAnalysis && typeof structuredAnalysis === 'object';
+
+  if (!hasStructured && !rawAnalysis) return null;
 
   return (
     <ReportContainer>
       <ReportTitle>Analysis Report</ReportTitle>
       <ReportContent>
-        {/* If the analysis is already HTML formatted */}
-        {typeof analysis === 'string' ? (
-          <div dangerouslySetInnerHTML={{ __html: analysis }} />
+        {hasStructured ? (
+          <>
+            {(structuredAnalysis.product_name || structuredAnalysis.product_domain) && (
+              <Section>
+                <SectionTitle>Product</SectionTitle>
+                <div>
+                  {structuredAnalysis.product_name && (
+                    <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
+                  )}
+                  {structuredAnalysis.product_domain && (
+                    <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
+                  )}
+                </div>
+              </Section>
+            )}
+
+            {Array.isArray(structuredAnalysis.thread_subjects) && structuredAnalysis.thread_subjects.length > 0 && (
+              <Section>
+                <SectionTitle>Thread Subjects</SectionTitle>
+                <ul>
+                  {structuredAnalysis.thread_subjects.map((item, idx) => (
+                    <li key={`ts-${idx}`}>{item}</li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {Array.isArray(structuredAnalysis.email_summaries) && structuredAnalysis.email_summaries.length > 0 && (
+              <Section>
+                <SectionTitle>Email Summaries</SectionTitle>
+                <ul>
+                  {structuredAnalysis.email_summaries.map((item, idx) => (
+                    <li key={`es-${idx}`}>{item}</li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {Array.isArray(structuredAnalysis.meeting_agenda) && structuredAnalysis.meeting_agenda.length > 0 && (
+              <Section>
+                <SectionTitle>Meeting Agenda</SectionTitle>
+                <ul>
+                  {structuredAnalysis.meeting_agenda.map((item, idx) => (
+                    <li key={`ma-${idx}`}>{item}</li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {Array.isArray(structuredAnalysis.meeting_date_time) && structuredAnalysis.meeting_date_time.length > 0 && (
+              <Section>
+                <SectionTitle>Meeting Date & Time</SectionTitle>
+                <ul>
+                  {structuredAnalysis.meeting_date_time.map((item, idx) => (
+                    <li key={`mdt-${idx}`}>{item}</li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            {structuredAnalysis.final_conclusion && (
+              <Section>
+                <SectionTitle>Final Conclusion</SectionTitle>
+                <div>
+                  <p>{structuredAnalysis.final_conclusion}</p>
+                </div>
+              </Section>
+            )}
+          </>
         ) : (
-          // If the analysis is an object with sections
-          Object.entries(analysis).map(([title, content]) => (
-            <Section key={title}>
-              <SectionTitle>{title}</SectionTitle>
-              <div dangerouslySetInnerHTML={{ __html: content }} />
-            </Section>
-          ))
+          // Fallback to raw formatted string/HTML
+          <div dangerouslySetInnerHTML={{ __html: rawAnalysis }} />
         )}
       </ReportContent>
     </ReportContainer>
