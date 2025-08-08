@@ -144,31 +144,92 @@ def structure_analysis_output(text: str) -> dict:
     """
     text = str(text or "")
 
-    # Sections (single-thread template)
-    email_summaries_raw = _extract_section(text, ["Email Summaries"])
-    meeting_agenda_raw = _extract_section(text, ["Meeting Agenda", "Consolidated Meeting Agenda"])
-    meeting_dt_raw = _extract_section(text, ["Meeting Date & Time", "Meeting Dates & Times"])
-    conclusion_raw = _extract_section(text, ["Final Conclusion"])
+    # Try strict JSON parse first (preferred for grouped multi-thread output)
+    def _try_parse_json(raw: str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+        # Look for fenced code block with JSON
+        m = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", raw, flags=re.IGNORECASE)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except Exception:
+                pass
+        # Fallback: find first '{' to last '}' to attempt parse
+        start = raw.find('{')
+        end = raw.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(raw[start:end+1])
+            except Exception:
+                pass
+        return None
 
-    # Multi-thread optional sections
+    json_obj = _try_parse_json(text)
+    if isinstance(json_obj, dict) and ("groups" in json_obj or "global_summary" in json_obj):
+        # Normalize grouped structure
+        groups_in = json_obj.get("groups", []) or []
+        groups_out = []
+        for g in groups_in:
+            groups_out.append({
+                "title": (g.get("title") or "Untitled Group").strip(),
+                "thread_subjects": g.get("thread_subjects") or g.get("threads") or [],
+                "email_summaries": g.get("email_summaries") or g.get("summaries") or [],
+                "meeting_agenda": g.get("meeting_agenda") or g.get("agenda") or [],
+                "meeting_date_time": g.get("meeting_dates_times") or g.get("meeting_date_time") or [],
+                "final_conclusion": g.get("final_conclusion") or g.get("conclusion") or "",
+                "products": g.get("products") or [],
+            })
+
+        global_summary_in = json_obj.get("global_summary") or {}
+        global_summary_out = {
+            "final_conclusion": global_summary_in.get("final_conclusion") or global_summary_in.get("conclusion") or "",
+            "products": global_summary_in.get("products") or [],
+        }
+
+        # Derive top-level product_name/domain if available (first product seen)
+        top_product_name = "Unknown Product"
+        top_product_domain = "general product"
+        all_products = []
+        for g in groups_out:
+            for p in g.get("products", []) or []:
+                all_products.append(p)
+        for p in global_summary_out.get("products", []) or []:
+            all_products.append(p)
+        if all_products:
+            first = all_products[0]
+            top_product_name = first.get("name") or top_product_name
+            top_product_domain = first.get("domain") or top_product_domain
+
+        return {
+            "groups": groups_out,
+            "global_summary": global_summary_out,
+            "product_name": top_product_name,
+            "product_domain": top_product_domain,
+        }
+
+    # Legacy markdown-style parsing (single or combined without groups)
+    email_summaries_raw = _extract_section(text, ["Email Summaries"]) or _extract_section(text, ["Combined Email Summaries"]) 
+    meeting_agenda_raw = _extract_section(text, ["Meeting Agenda", "Consolidated Meeting Agenda"]) 
+    meeting_dt_raw = _extract_section(text, ["Meeting Date & Time", "Meeting Dates & Times"]) 
+    conclusion_raw = _extract_section(text, ["Final Conclusion"]) 
     thread_subjects_raw = _extract_section(text, ["Thread Subjects"]) or ""
-    combined_summaries_raw = _extract_section(text, ["Combined Email Summaries"]) or email_summaries_raw
 
     structured = {
         "thread_subjects": _parse_bullets(thread_subjects_raw) if thread_subjects_raw else [],
-        "email_summaries": _parse_bullets(combined_summaries_raw),
+        "email_summaries": _parse_bullets(email_summaries_raw),
         "meeting_agenda": _parse_bullets(meeting_agenda_raw),
         "meeting_date_time": _parse_bullets(meeting_dt_raw),
         "final_conclusion": conclusion_raw.strip() if conclusion_raw else "",
     }
 
-    # Attach product info
     product = parse_product_info(text)
     structured.update({
         "product_name": product["product_name"],
         "product_domain": product["product_domain"],
     })
-
     return structured
 
 
@@ -453,25 +514,46 @@ def analyze_multiple_threads(thread_ids: list):
     combined_content = "\n\n".join(all_thread_contents)
     analysis_agent = agents.meeting_agenda_extractor()
 
+    # New grouped multi-thread prompt with strict JSON output
+    thread_subjects_block = "\n".join([f"- {s}" for s in all_subjects])
+    json_schema = (
+        "{"
+        "\n  \"groups\": ["
+        "\n    {"
+        "\n      \"title\": \"string\","
+        "\n      \"thread_subjects\": [\"string\"],"
+        "\n      \"email_summaries\": [\"string\"],"
+        "\n      \"meeting_agenda\": [\"string\"],"
+        "\n      \"meeting_date_time\": [\"string\"],"
+        "\n      \"final_conclusion\": \"string\","
+        "\n      \"products\": [ { \"name\": \"string\", \"domain\": \"string\" } ]"
+        "\n    }"
+        "\n  ],"
+        "\n  \"global_summary\": {"
+        "\n    \"final_conclusion\": \"string\","
+        "\n    \"products\": [ { \"name\": \"string\", \"domain\": \"string\" } ]"
+        "\n  }"
+        "\n}"
+    )
+
     task = Task(
         description=(
-            f"Analyze the provided {len(thread_ids)} email threads and create a comprehensive summary. "
-            "Your final answer MUST strictly follow this template:\n\n"
-            "**Thread Subjects:**\n"
-            f"{chr(10).join([f'- {subject}' for subject in all_subjects])}\n\n"
-            "**Combined Email Summaries:**\n"
-            "- [Summary of key emails across all threads]\n\n"
-            "**Consolidated Meeting Agenda:**\n"
-            "- [Combined meeting agenda items from all threads]\n\n"
-            "**Meeting Dates & Times:**\n"
-            "- [All extracted dates and times from all threads]\n\n"
-            "**Final Conclusion:**\n"
-            "- [Overall summary combining insights from all threads]\n\n"
-            "**Product Name:** [The main product name identified across threads]\n"
-            "**Product Domain:** [The general domain of the product]\n\n"
-            f"--- COMBINED EMAIL THREAD CONTENT ---\n{combined_content}"
+            f"You are given {len(thread_ids)} email threads. Analyze all emails together. "
+            "Your job is to intelligently group emails by topics such as product/service discussed, meeting agendas, feature requests, demos/sales, bug reports, and general queries. "
+            "If two threads reference the same product or meeting, group them together."
+            "\n\nThread Subjects:\n"
+            f"{thread_subjects_block}\n\n"
+            "Output STRICTLY as minified JSON following this schema (no markdown, no prose, just JSON):\n"
+            f"{json_schema}\n\n"
+            "Rules:\n"
+            "- Provide clear human-readable group titles.\n"
+            "- For each group, include thread_subjects that contributed.\n"
+            "- Extract meeting_agenda and meeting_date_time where present.\n"
+            "- Include a group-specific final_conclusion.\n"
+            "- In global_summary, add a high-level final_conclusion and consolidated products/domains.\n\n"
+            f"EMAIL CONTENT START\n{combined_content}\nEMAIL CONTENT END"
         ),
-        expected_output="A structured summary that strictly follows the provided template, consolidating information from all email threads.",
+        expected_output="Valid JSON matching the schema with grouped results and a global summary.",
         agent=analysis_agent
     )
 
