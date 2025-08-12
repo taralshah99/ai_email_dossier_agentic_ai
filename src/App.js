@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
-import { Search, Menu, X, Mail } from 'lucide-react';
+import { Search, Menu, X, Mail, FileText } from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import DatePicker from 'react-datepicker';
@@ -10,55 +10,37 @@ import AnalysisReport from './components/AnalysisReport';
 
 const AppContainer = styled.div`
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background-color: #1a1a1a;
   color: #ffffff;
 `;
 
-const Sidebar = styled.div`
-  width: 350px;
-  background-color: #2a2a2a;
-  padding: 20px;
-  border-right: 1px solid #404040;
-  position: relative;
-  transition: transform 0.3s ease;
-  
-  @media (max-width: 768px) {
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100vh;
-    z-index: 1000;
-    transform: ${props => props.isOpen ? 'translateX(0)' : 'translateX(-100%)'};
-  }
-`;
-
-const MenuToggle = styled.button`
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  background: none;
-  border: none;
-  color: #ffffff;
-  cursor: pointer;
-  font-size: 18px;
+const TopBar = styled.div`
+  position: sticky;
+  top: 0;
   z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 6px;
-  transition: background-color 0.2s;
+  background: linear-gradient(180deg, #2a2a2a 0%, #262626 100%);
+  border-bottom: 1px solid #404040;
+  padding: 16px 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+`;
+
+const FiltersRow = styled.div`
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1.5fr;
+  align-items: end;
   
-  &:hover {
-    background-color: #404040;
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
   }
 `;
 
-const SidebarContent = styled.div`
-  margin-top: 60px;
-`;
+const BarSection = styled.div``;
 
 const Section = styled.div`
   margin-bottom: 30px;
@@ -88,7 +70,7 @@ const Input = styled.input`
   padding: 12px;
   border: 1px solid #404040;
   border-radius: 6px;
-  background-color: #333;
+  background-color: #2d2d2d;
   color: #ffffff;
   font-size: 14px;
   
@@ -107,7 +89,7 @@ const StyledDatePicker = styled(DatePicker)`
   padding: 12px;
   border: 1px solid #404040;
   border-radius: 6px;
-  background-color: #333;
+  background-color: #2d2d2d;
   color: #ffffff;
   font-size: 14px;
   cursor: pointer;
@@ -125,7 +107,7 @@ const StyledDatePicker = styled(DatePicker)`
 const SearchButton = styled.button`
   width: 100%;
   padding: 15px;
-  background-color: #ff4444;
+  background: linear-gradient(180deg, #ff5a5a 0%, #ff4444 100%);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -140,7 +122,7 @@ const SearchButton = styled.button`
   margin-top: 20px;
   
   &:hover {
-    background-color: #ff6666;
+    background: linear-gradient(180deg, #ff6d6d 0%, #ff5656 100%);
   }
   
   &:disabled {
@@ -151,7 +133,7 @@ const SearchButton = styled.button`
 
 const MainContent = styled.div`
   flex: 1;
-  padding: 40px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -190,24 +172,28 @@ const Description = styled.div`
   line-height: 1.6;
 `;
 
-const MobileMenuButton = styled.button`
-  position: fixed;
-  top: 20px;
-  left: 20px;
+const DossierContainer = styled.div`
+  width: 100%;
+  max-width: 800px;
+  margin-top: 20px;
+  padding: 20px;
+  background-color: #2a2a2a;
+  border-radius: 8px;
+  border: 1px solid #404040;
+  color: #e0e0e0;
+  white-space: pre-wrap;
+`;
+
+const ActionsBar = styled.div`
+  position: sticky;
+  bottom: 0;
   background: #2a2a2a;
-  border: none;
-  color: #ffffff;
-  cursor: pointer;
-  padding: 10px;
-  border-radius: 6px;
-  z-index: 1001;
-  display: none;
-  
-  @media (max-width: 768px) {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+  border-top: 1px solid #404040;
+  padding: 12px 16px;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  width: 100%;
 `;
 
 const Overlay = styled.div`
@@ -267,6 +253,7 @@ function App() {
   const [endDate, setEndDate] = useState(new Date(2025, 7, 5));
   const [keyword, setKeyword] = useState('');
   const [senderEmail, setSenderEmail] = useState('');
+  const [advancedQuery, setAdvancedQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
@@ -274,6 +261,9 @@ function App() {
   const [selectedThreads, setSelectedThreads] = useState([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResults, setAnalysisResults] = useState(null);
+  const [keywordError, setKeywordError] = useState(false);
+  const [isGeneratingDossier, setIsGeneratingDossier] = useState(false);
+  const [dossier, setDossier] = useState(null);
 
   const handleSearch = async () => {
     setIsLoading(true);
@@ -282,7 +272,17 @@ function App() {
     setSearchResults([]);
     setSelectedThreads([]);
     setAnalysisResults(null);
-    
+    setDossier(null);
+    setKeywordError(false);
+
+    // Make keyword compulsory
+    if (!keyword.trim()) {
+      setError('Keyword is required.');
+      setKeywordError(true);
+      setIsLoading(false);
+      return;
+    }
+
     // Validate dates
     if (startDate > endDate) {
       setError('Start date cannot be after end date.');
@@ -301,7 +301,8 @@ function App() {
         start_date: format(startDate, 'yyyy/MM/dd'),
         end_date: format(endDate, 'yyyy/MM/dd'),
         keyword: keyword || null,
-        from_email: senderEmail || null
+        from_email: senderEmail || null,
+        query: advancedQuery || null
       });
       
       setSearchResults(response.data);
@@ -331,6 +332,7 @@ function App() {
     
     setIsAnalyzing(true);
     setAnalysisResults(null);
+    setDossier(null);
     
     try {
       let response;
@@ -353,88 +355,105 @@ function App() {
     }
   };
 
+  const handleGenerateDossier = async () => {
+    if (!analysisResults) {
+      setError('Analyze threads first to generate a dossier.');
+      return;
+    }
+    setIsGeneratingDossier(true);
+    setError('');
+    try {
+      const response = await axios.post('/api/generate_dossier', {
+        analysis: {
+          structured_analysis: analysisResults.structured_analysis,
+          raw_analysis: analysisResults.analysis
+        }
+      });
+      setDossier(response.data || null);
+    } catch (e) {
+      console.error('Error generating dossier:', e);
+      setError('An error occurred while generating the dossier.');
+    } finally {
+      setIsGeneratingDossier(false);
+    }
+  };
+
   const toggleMenu = () => {
     setIsMenuOpen(!isMenuOpen);
   };
 
   return (
     <AppContainer>
-      <MobileMenuButton onClick={toggleMenu}>
-        <Menu size={20} />
-      </MobileMenuButton>
-      
-      <Overlay isOpen={isMenuOpen} onClick={toggleMenu} />
-      
-      <Sidebar isOpen={isMenuOpen}>
-        <MenuToggle onClick={toggleMenu}>
-          <X size={20} />
-        </MenuToggle>
-        
-        <SidebarContent>
-          <Section>
-            <SectionTitle>Date Range</SectionTitle>
-            
-            <FormGroup>
-              <Label>Start Date</Label>
-              <StyledDatePicker
-                selected={startDate}
-                onChange={(date) => setStartDate(date)}
-                dateFormat="yyyy/MM/dd"
-                placeholderText="Select start date"
-                maxDate={endDate}
-                showYearDropdown
-                scrollableYearDropdown
-                yearDropdownItemNumber={15}
-                showMonthDropdown
-                scrollableMonthDropdown
-                showMonthYearPicker={false}
-                showFullMonthYearPicker={false}
-              />
-            </FormGroup>
-            
-            <FormGroup>
-              <Label>End Date</Label>
-              <StyledDatePicker
-                selected={endDate}
-                onChange={(date) => setEndDate(date)}
-                dateFormat="yyyy/MM/dd"
-                placeholderText="Select end date"
-                minDate={startDate}
-                showYearDropdown
-                scrollableYearDropdown
-                yearDropdownItemNumber={15}
-                showMonthDropdown
-                scrollableMonthDropdown
-                showMonthYearPicker={false}
-                showFullMonthYearPicker={false}
-              />
-            </FormGroup>
-          </Section>
-          
-          <Section>
-            <SectionTitle>Search Options</SectionTitle>
-            
-            <FormGroup>
-              <Label>Keyword</Label>
-              <Input
-                type="text"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                placeholder="Search email thread subjects by keyword"
-              />
-            </FormGroup>
-            
-            <FormGroup>
-              <Label>Sender Email</Label>
-              <Input
-                type="email"
-                value={senderEmail}
-                onChange={(e) => setSenderEmail(e.target.value)}
-                placeholder="Filter emails by sender email"
-              />
-            </FormGroup>
-          </Section>
-          
+      <TopBar>
+        <SectionTitle style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 18 }}>
+          <Mail size={18} /> Search Emails
+        </SectionTitle>
+        <FiltersRow>
+          <FormGroup>
+            <Label>Start Date</Label>
+            <StyledDatePicker
+              selected={startDate}
+              onChange={(date) => setStartDate(date)}
+              dateFormat="yyyy/MM/dd"
+              placeholderText="Select start date"
+              maxDate={endDate}
+              showYearDropdown
+              scrollableYearDropdown
+              yearDropdownItemNumber={15}
+              showMonthDropdown
+              scrollableMonthDropdown
+              showMonthYearPicker={false}
+              showFullMonthYearPicker={false}
+            />
+          </FormGroup>
+          <FormGroup>
+            <Label>End Date</Label>
+            <StyledDatePicker
+              selected={endDate}
+              onChange={(date) => setEndDate(date)}
+              dateFormat="yyyy/MM/dd"
+              placeholderText="Select end date"
+              minDate={startDate}
+              showYearDropdown
+              scrollableYearDropdown
+              yearDropdownItemNumber={15}
+              showMonthDropdown
+              scrollableMonthDropdown
+              showMonthYearPicker={false}
+              showFullMonthYearPicker={false}
+            />
+          </FormGroup>
+          <FormGroup>
+            <Label>Keyword <span style={{color: '#ff4444'}}>*</span></Label>
+            <Input
+              type="text"
+              value={keyword}
+              onChange={(e) => { setKeyword(e.target.value); setKeywordError(false); }}
+              placeholder="Keyword (e.g., invoice, roadmap)"
+              style={keywordError ? { borderColor: '#ff4444', background: '#2a1a1a' } : {}}
+              required
+            />
+          </FormGroup>
+          <FormGroup>
+            <Label>Sender Email</Label>
+            <Input
+              type="email"
+              value={senderEmail}
+              onChange={(e) => setSenderEmail(e.target.value)}
+              placeholder="from: someone@company.com"
+            />
+          </FormGroup>
+          <FormGroup>
+            <Label>Advanced Query</Label>
+            <Input
+              type="text"
+              value={advancedQuery}
+              onChange={(e) => setAdvancedQuery(e.target.value)}
+              placeholder='subject:"invoice" has:attachment -in:chats'
+            />
+          </FormGroup>
+        </FiltersRow>
+        <div style={{ marginTop: 12 }}>
           <SearchButton onClick={handleSearch} disabled={isLoading}>
             {isLoading ? (
               <LoadingSpinner />
@@ -443,8 +462,8 @@ function App() {
             )}
             Find Relevant Emails
           </SearchButton>
-        </SidebarContent>
-      </Sidebar>
+        </div>
+      </TopBar>
       
       <MainContent>
         <Title>
@@ -485,6 +504,53 @@ function App() {
             structuredAnalysis={analysisResults.structured_analysis}
             rawAnalysis={analysisResults.analysis}
           />
+        )}
+
+        {analysisResults && (
+          <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+            <div style={{ maxWidth: 800, width: '100%' }}>
+              <SearchButton onClick={handleGenerateDossier} disabled={isGeneratingDossier}>
+                {isGeneratingDossier ? (
+                  <LoadingSpinner />
+                ) : (
+                  <FileText size={18} />
+                )}
+                Generate Dossier
+              </SearchButton>
+            </div>
+          </div>
+        )}
+
+        {dossier && (
+          <DossierContainer>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Email Dossier</h3>
+            <div>
+              <h4 style={{ color: '#fff', marginBottom: 8 }}>Meeting Flow</h4>
+              <div style={{ marginBottom: 16 }}>
+                {dossier.meeting_flow || ''}
+              </div>
+              <h4 style={{ color: '#fff', marginBottom: 8 }}>Client Details</h4>
+              <div>
+                {dossier.client_details || 'Client Details: To be added.'}
+              </div>
+            </div>
+          </DossierContainer>
+        )}
+
+        {selectedThreads.length > 0 && (
+          <ActionsBar>
+            <SearchButton onClick={handleAnalyzeSelected} disabled={isAnalyzing}>
+              {isAnalyzing ? (
+                <LoadingSpinner />
+              ) : (
+                <Mail size={18} />
+              )}
+              Analyze Selected ({selectedThreads.length})
+            </SearchButton>
+            <SearchButton onClick={() => setSelectedThreads([])} disabled={isAnalyzing}>
+              Clear Selection
+            </SearchButton>
+          </ActionsBar>
         )}
       </MainContent>
     </AppContainer>

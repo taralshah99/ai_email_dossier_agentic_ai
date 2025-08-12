@@ -66,6 +66,110 @@ def parse_product_info(text: str):
     }
 
 
+def _slugify(name: str) -> str:
+    s = str(name or "").strip().lower()
+    s = s.replace(" ", "-")
+    s = re.sub(r"[^a-z0-9-]", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or "unknown"
+
+
+def read_local_product_knowledge(product_name: str) -> str:
+    """Read local knowledge for a product.
+
+    Priority:
+    1) local_knowledge/products/<slug>/*.{md,txt,json,yaml,yml}
+    2) local_knowledge/techify_solutions/product-portfolio.md (extract nearest section)
+    Returns a bounded text blob or empty string.
+    """
+    try:
+        # 1) per-product folder (existing behavior)
+        base_dir = os.path.join(os.path.dirname(__file__), "local_knowledge", "products", _slugify(product_name))
+        pieces: list[str] = []
+        if os.path.isdir(base_dir):
+            for root, _, files in os.walk(base_dir):
+                for fn in files:
+                    low = fn.lower()
+                    if not (low.endswith(".md") or low.endswith(".txt") or low.endswith(".json") or low.endswith(".yaml") or low.endswith(".yml")):
+                        continue
+                    full = os.path.join(root, fn)
+                    try:
+                        with open(full, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        pieces.append(f"# {fn}\n{content[:20000]}")
+                    except Exception:
+                        continue
+            joined = "\n\n".join(pieces)
+            return joined[:60000] if joined else ""
+
+        # 2) fallback: single product-portfolio.md under techify_solutions
+        fallback = os.path.join(os.path.dirname(__file__), "local_knowledge", "techify_solutions", "product-portfolio.md")
+        if os.path.isfile(fallback):
+            try:
+                with open(fallback, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                return ""
+
+            if not product_name:
+                return content[:60000]
+
+            # Find all H2 headers (lines starting with '##') with their offsets
+            headers = []
+            for m in re.finditer(r"(?m)^##\s*(.*)$", content):
+                headers.append((m.start(), m.group(1).strip()))
+
+            def normalize_for_match(s: str) -> str:
+                return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+            target_norm = normalize_for_match(product_name)
+            # Try exact-ish header match (contains / contained)
+            for idx, (pos, header) in enumerate(headers):
+                header_norm = normalize_for_match(header)
+                if not header_norm:
+                    continue
+
+                # Allow full name match OR any word from product_name match
+                target_words = [normalize_for_match(w) for w in product_name.split() if w]
+                if (
+                    (target_norm and (target_norm in header_norm or header_norm in target_norm))
+                    or any(w and w in header_norm for w in target_words)
+                ):
+                    start = pos
+                    end = len(content)
+                    if idx + 1 < len(headers):
+                        end = headers[idx + 1][0]
+                    section = content[start:end].strip()
+                    return section[:60000]
+
+
+            # Fallback: find first textual match and return the containing section between nearest headers
+            m = re.search(re.escape(product_name), content, flags=re.IGNORECASE)
+            if m:
+                # find previous header boundary
+                prev_header_pos = 0
+                for pos, _ in headers:
+                    if pos < m.start():
+                        prev_header_pos = pos
+                    else:
+                        break
+                # find next header after the found match
+                next_header_pos = len(content)
+                for pos, _ in headers:
+                    if pos > m.start():
+                        next_header_pos = pos
+                        break
+                section = content[prev_header_pos:next_header_pos].strip()
+                return section[:60000]
+
+            # No specific section found — return entire file (bounded)
+            return content[:60000]
+
+        return ""
+    except Exception:
+        return ""
+
+
 def _extract_section(text: str, header_variants: list[str]) -> str:
     """Return raw section content between a header and the next header or end.
 
@@ -234,6 +338,53 @@ def structure_analysis_output(text: str) -> dict:
 
 
 # --- Aliases / Embeddings Utilities ---
+def _extract_text_from_message(msg: dict) -> str:
+    """Extract human-readable text from a Gmail message dict.
+
+    Combines snippet, text/plain parts, and text/html (tags stripped).
+    This is used for deterministic substring checks (non-AI).
+    """
+    collected: list[str] = []
+
+    # Snippet first
+    snippet = msg.get("snippet")
+    if snippet:
+        collected.append(str(snippet))
+
+    def _decode_part_data(part: dict) -> str:
+        data = part.get("body", {}).get("data")
+        if not data:
+            return ""
+        try:
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+    def _walk_parts(payload: dict):
+        if not payload:
+            return
+        mime = payload.get("mimeType", "")
+        if mime.startswith("text/plain"):
+            txt = _decode_part_data(payload)
+            if txt:
+                collected.append(txt)
+        elif mime.startswith("text/html"):
+            html = _decode_part_data(payload)
+            if html:
+                # Strip tags and condense spaces
+                text_only = re.sub(r"<[^>]+>", " ", html)
+                text_only = re.sub(r"\s+", " ", text_only).strip()
+                if text_only:
+                    collected.append(text_only)
+
+        # Recurse into children
+        for child in payload.get("parts", []) or []:
+            _walk_parts(child)
+
+    payload = msg.get("payload", {})
+    _walk_parts(payload)
+
+    return "\n".join([c for c in collected if c]).strip()
 def expand_keyword_aliases(keyword: str) -> List[str]:
     """Generate likely variations/abbreviations for the keyword via a lightweight prompt.
 
@@ -316,45 +467,115 @@ def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
         return 0.0
     return dot / (norm_a * norm_b)
 
-def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None):
-    """Smart relevancy finder with exact-phrase Gmail queries, embeddings pre-filter, and AI triage.
+def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None, deep_scan: bool = False):
+    """Gmail-native search only using the q parameter, broadened for better parity with Gmail UI.
 
-    - No OR tokenization: we query Gmail separately per alias phrase and union thread IDs
-    - Embeddings: semantic pre-filter on subject + snippet/body
-    - AI triage: final YES/NO with context awareness of aliases
+    Changes vs previous:
+    - Treat end_date as inclusive by using before:(end_date + 1 day)
+    - Expand keyword search to include body and headers via an OR group:
+      ( keyword OR "keyword phrase" OR subject:keyword OR from:keyword OR to:keyword OR cc:keyword )
+      including simple normalized variants (punctuation/space variants)
+    - Skip all AI steps
     """
     service = ensure_gmail_service()
 
-    # 1) Build alias phrases (exact phrases only)
-    aliases = expand_keyword_aliases(keyword) if keyword else []
-    alias_phrases = aliases if aliases else ([keyword] if keyword else [])
+    # Build Gmail native search query (q)
+    search_parts = []
+    if start_date:
+        search_parts.append(f"after:{start_date}")
+    if end_date:
+        # Make end date inclusive by adding one day for the before: operator
+        try:
+            from datetime import datetime, timedelta
+            end_dt = datetime.strptime(end_date, "%Y/%m/%d") + timedelta(days=1)
+            end_inclusive = end_dt.strftime("%Y/%m/%d")
+        except Exception:
+            end_inclusive = end_date  # Fallback to provided date
+        search_parts.append(f"before:{end_inclusive}")
+    if from_email:
+        search_parts.append(f"from:{from_email}")
 
-    # 2) Run separate Gmail searches per alias phrase; union thread IDs
-    thread_ids = set()
-    for phrase in alias_phrases if alias_phrases else [None]:
-        search_parts = [f"after:{start_date} before:{end_date}"]
-        if from_email:
-            search_parts.append(f"from:{from_email}")
-        if phrase:
-            # exact phrase; quote if contains spaces
-            if " " in phrase:
-                search_parts.append(f'"{phrase}"')
-            else:
-                search_parts.append(phrase)
-        if query:
-            search_parts.append(query)
-        search_query = " ".join(search_parts)
-        threads_page = list_email_threads(service, query=search_query)
-        for t in threads_page:
-            if t.get("id"):
-                thread_ids.add(t["id"])
+    # Build keyword segment. For strict parity with Gmail UI, prefer raw keyword only.
+    if keyword:
+        if os.getenv("STRICT_GMAIL_MATCH", "true").lower() == "true":
+            # Use keyword exactly as the user would type into Gmail's search bar
+            kw = str(keyword).strip()
+            if kw:
+                if " " in kw:
+                    search_parts.append(f'"{kw}"')
+                else:
+                    search_parts.append(kw)
+        else:
+            # Enhanced mode: Build an OR group for keyword across body and common headers
+            kw = str(keyword).strip()
+            variants = [kw]
+            # Simple normalizations to catch punctuation variants in addresses/text
+            compact = kw.replace("-", " ").replace("_", " ").replace("+", " ").replace(".", " ")
+            collapsed = compact.replace(" ", "")
+            if compact and compact.lower() not in [v.lower() for v in variants]:
+                variants.append(compact)
+            if collapsed and collapsed.lower() not in [v.lower() for v in variants]:
+                variants.append(collapsed)
 
-    if not thread_ids:
+            or_terms = []
+            for v in variants:
+                v = v.strip()
+                if not v:
+                    continue
+                # Unquoted general term searches body + subject by Gmail semantics
+                or_terms.append(v)
+                # Quoted phrase if contains spaces
+                if " " in v:
+                    or_terms.append(f'"{v}"')
+                # Explicit header targets
+                or_terms.append(f"subject:{v}")
+                or_terms.append(f"from:{v}")
+                or_terms.append(f"to:{v}")
+                or_terms.append(f"cc:{v}")
+                # Domain/handle heuristics often matched by Gmail UI
+                # e.g., searching 'halal' should catch '@halal', '@halal.com', 'halal.com', 'halaltechnologies.com'
+                if not v.startswith("@"):
+                    or_terms.append(f"@{v}")
+                or_terms.append(f"{v}.com")
+                or_terms.append(f"@{v}.com")
+                # Common suffix pattern for tech companies
+                or_terms.append(f"{v}technologies")
+                or_terms.append(f"{v}technologies.com")
+                or_terms.append(f"@{v}technologies.com")
+                # Mailing list header
+                or_terms.append(f"list:{v}.com")
+
+            # Deduplicate while preserving order
+            seen = set()
+            deduped = []
+            for t in or_terms:
+                key = t.lower()
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(t)
+            if deduped:
+                search_parts.append("(" + " OR ".join(deduped) + ")")
+
+    if query:
+        search_parts.append(query)
+
+    search_query = " ".join(search_parts).strip()
+
+    # Detect scope for includeSpamTrash parity with Gmail
+    q_lower = search_query.lower()
+    include_spam_trash = any(token in q_lower for token in ["in:anywhere", "in:spam", "in:trash"])
+
+    # Fetch threads directly from Gmail using the native query
+    threads_page = list_email_threads(service, query=search_query, include_spam_trash=include_spam_trash)
+    if not threads_page:
         return []
 
-    # Fetch lightweight info for all unique threads
-    candidates = []
-    for thread_id in thread_ids:
+    # Enrich with subject/sender/snippet for UI, without any AI-based filtering
+    relevant_threads = []
+    for t in threads_page:
+        thread_id = t.get("id")
+        if not thread_id:
+            continue
         subject, sender = get_thread_subject_and_sender(service, thread_id)
         messages = get_email_thread(service, thread_id)
         snippet = ""
@@ -363,77 +584,200 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
             if "snippet" in msg:
                 snippet = msg["snippet"]
             elif msg.get("payload", {}).get("parts"):
-                for part in msg["payload"]["parts"]:
+                for part in msg["payload"].get("parts", []):
                     if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
                         snippet = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
                         break
-        candidates.append({
-            "id": thread_id,
-            "subject": subject or "",
-            "sender": sender or "",
-            "text": f"{subject or ''}\n{snippet or ''}".strip()
-        })
-
-    # 3) Embeddings semantic pre-filter
-    kept = candidates
-    try:
-        if alias_phrases and _azure_embeddings_available():
-            # Compute embeddings for queries and candidates
-            query_vectors = get_azure_embeddings(alias_phrases)
-            doc_vectors = get_azure_embeddings([c["text"] for c in candidates])
-
-            scored = []
-            for c, dv in zip(candidates, doc_vectors):
-                max_sim = max((cosine_similarity(dv, qv) for qv in query_vectors), default=0.0)
-                c["semantic_score"] = max_sim
-                scored.append(c)
-
-            # Threshold/top-k filter
-            threshold = float(os.getenv("SEMANTIC_SIM_THRESHOLD", "0.75"))
-            top_k = int(os.getenv("SEMANTIC_TOP_K", "60"))
-            scored.sort(key=lambda x: x.get("semantic_score", 0.0), reverse=True)
-            kept = [s for s in scored if s.get("semantic_score", 0.0) >= threshold][:top_k]
-    except Exception as e:
-        # If embeddings fail, proceed without semantic filter
-        print(f"Embeddings step failed, continuing without semantic filter: {e}")
-        kept = candidates
-
-    # 4) AI triage with alias context (only on the kept subset)
-    relevant_threads = []
-    if keyword:
-        triage_agent = agents.email_triage_agent(keyword)
-    else:
-        triage_agent = None
-
-    for c in kept:
-        subject = c["subject"]
-        text = c["text"]
-        if triage_agent:
-            alias_hint = ", ".join(alias_phrases[:8])
-            sim_hint = f"Similarity: {c.get('semantic_score', 0.0):.2f}" if "semantic_score" in c else ""
-            triage_desc = (
-                f"Determine if this email is about '{keyword}' or its variations.\n"
-                f"Known aliases: {alias_hint}\n{sim_hint}\n\n"
-                f"Subject: {subject}\n\nBody Excerpt: {text[:1500]}"
-            )
-            triage_task = Task(
-                description=triage_desc,
-                expected_output="YES or NO",
-                agent=triage_agent
-            )
-            crew = Crew(agents=[triage_agent], tasks=[triage_task], process=Process.sequential)
-            outcome = str(crew.kickoff()).strip().upper()
-            if outcome.startswith("NO"):
-                continue
-
         relevant_threads.append({
-            "id": c["id"],
+            "id": thread_id,
             "subject": subject or "No Subject",
-            "sender": c["sender"] or "Unknown Sender",
-            "body": c["text"]
+            "sender": sender or "Unknown Sender",
+            "body": f"{subject or ''}\n{snippet or ''}".strip()
         })
+
+    # Optional deterministic substring augmentation: capture threads whose body contains the keyword
+    # even if Gmail's q did not match them (e.g., company name only inside an email address in the body).
+    if keyword:
+        found_ids = {t["id"] for t in relevant_threads}
+        # Build a broad query limited to the same date window (and from_email if provided)
+        broad_parts = []
+        if start_date:
+            broad_parts.append(f"after:{start_date}")
+        if end_date:
+            try:
+                from datetime import datetime, timedelta
+                end_dt = datetime.strptime(end_date, "%Y/%m/%d") + timedelta(days=1)
+                end_inclusive = end_dt.strftime("%Y/%m/%d")
+            except Exception:
+                end_inclusive = end_date
+            broad_parts.append(f"before:{end_inclusive}")
+        if from_email:
+            broad_parts.append(f"from:{from_email}")
+        # Keep user's advanced query constraints, but omit the keyword to avoid excluding matches
+        if query:
+            broad_parts.append(query)
+        # Optionally include anywhere for more parity
+        if os.getenv("BODY_SUBSTRING_IN_ANYWHERE", "true").lower() == "true":
+            broad_parts.append("in:anywhere")
+        broad_q = " ".join(broad_parts).strip()
+
+        # Only run augmentation if explicitly enabled (opt-in) or when initial hits are very low
+        # Gate augmentation by request flag or environment configuration (default off for speed)
+        enable_augment_env = os.getenv("ENABLE_BODY_SUBSTRING_AUGMENT", "false").lower()
+        enable_augment = deep_scan or (enable_augment_env == "true") or (enable_augment_env == "auto" and len(relevant_threads) < int(os.getenv("BODY_SUBSTRING_MIN_RESULTS", "5")))
+        if not enable_augment:
+            return relevant_threads
+
+        # Fetch a limited number of candidate threads and post-filter locally by substring
+        # Limit how many candidates we even list to avoid long runtimes
+        max_candidates = int(os.getenv("BODY_SUBSTRING_AUGMENT_CANDIDATES", "1000"))
+        candidates: list[dict] = []
+        page_token = None
+        while True:
+            batch_size = min(100, max_candidates - len(candidates))
+            if batch_size <= 0:
+                break
+            results = service.users().threads().list(userId="me", q=broad_q, includeSpamTrash=False, pageToken=page_token, maxResults=batch_size).execute()
+            candidates.extend(results.get("threads", []))
+            page_token = results.get("nextPageToken")
+            if not page_token or len(candidates) >= max_candidates:
+                break
+        kw_lower = str(keyword).lower()
+        # Safety bound on additional processing
+        max_extra = int(os.getenv("BODY_SUBSTRING_AUGMENT_MAX", "2000"))
+        checked = 0
+        for t in candidates:
+            if checked >= max_extra:
+                break
+            thread_id = t.get("id")
+            if not thread_id or thread_id in found_ids:
+                continue
+            checked += 1
+            msgs = get_email_thread(service, thread_id)
+            if not msgs:
+                continue
+            # Aggregate text from a few messages
+            aggregate_text = []
+            for m in msgs:  # limit per thread for speed
+                aggregate_text.append(_extract_text_from_message(m))
+                # Also consider metadata headers for participants
+                headers = m.get("payload", {}).get("headers", [])
+                for h in headers:
+                    if h.get("name", "").lower() in {"from", "to", "cc", "bcc"}:
+                        aggregate_text.append(str(h.get("value", "")))
+            combined = "\n".join([x for x in aggregate_text if x]).lower()
+            if kw_lower and kw_lower in combined:
+                subject2, sender2 = get_thread_subject_and_sender(service, thread_id)
+                # Use snippet if available
+                body_preview = ""
+                if msgs and "snippet" in msgs[0]:
+                    body_preview = msgs[0]["snippet"]
+                relevant_threads.append({
+                    "id": thread_id,
+                    "subject": subject2 or "No Subject",
+                    "sender": sender2 or "Unknown Sender",
+                    "body": f"{subject2 or ''}\n{body_preview or ''}".strip()
+                })
+                found_ids.add(thread_id)
 
     return relevant_threads
+
+    # --- ORIGINAL AI-BASED FILTERING LOGIC (COMMENTED OUT) ---
+    # The following block is preserved for reference but intentionally disabled.
+    #
+    # 1) Build alias phrases (exact phrases only)
+    # aliases = expand_keyword_aliases(keyword) if keyword else []
+    # alias_phrases = aliases if aliases else ([keyword] if keyword else [])
+    #
+    # 2) Run separate Gmail searches per alias phrase; union thread IDs
+    # thread_ids = set()
+    # for phrase in alias_phrases if alias_phrases else [None]:
+    #     search_parts = [f"after:{start_date} before:{end_date}"]
+    #     if from_email:
+    #         search_parts.append(f"from:{from_email}")
+    #     if phrase:
+    #         if " " in phrase:
+    #             search_parts.append(f'"{phrase}"')
+    #         else:
+    #             search_parts.append(phrase)
+    #     if query:
+    #         search_parts.append(query)
+    #     search_query = " ".join(search_parts)
+    #     threads_page = list_email_threads(service, query=search_query)
+    #     for t in threads_page:
+    #         if t.get("id"):
+    #             thread_ids.add(t["id"])
+    # if not thread_ids:
+    #     return []
+    # candidates = []
+    # for thread_id in thread_ids:
+    #     subject, sender = get_thread_subject_and_sender(service, thread_id)
+    #     messages = get_email_thread(service, thread_id)
+    #     snippet = ""
+    #     if messages:
+    #         msg = messages[0]
+    #         if "snippet" in msg:
+    #             snippet = msg["snippet"]
+    #         elif msg.get("payload", {}).get("parts"):
+    #             for part in msg["payload"]["parts"]:
+    #                 if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+    #                     snippet = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
+    #                     break
+    #     candidates.append({
+    #         "id": thread_id,
+    #         "subject": subject or "",
+    #         "sender": sender or "",
+    #         "text": f"{subject or ''}\n{snippet or ''}".strip()
+    #     })
+    # kept = candidates
+    # try:
+    #     if alias_phrases and _azure_embeddings_available():
+    #         query_vectors = get_azure_embeddings(alias_phrases)
+    #         doc_vectors = get_azure_embeddings([c["text"] for c in candidates])
+    #         scored = []
+    #         for c, dv in zip(candidates, doc_vectors):
+    #             max_sim = max((cosine_similarity(dv, qv) for qv in query_vectors), default=0.0)
+    #             c["semantic_score"] = max_sim
+    #             scored.append(c)
+    #         threshold = float(os.getenv("SEMANTIC_SIM_THRESHOLD", "0.75"))
+    #         top_k = int(os.getenv("SEMANTIC_TOP_K", "60"))
+    #         scored.sort(key=lambda x: x.get("semantic_score", 0.0), reverse=True)
+    #         kept = [s for s in scored if s.get("semantic_score", 0.0) >= threshold][:top_k]
+    # except Exception as e:
+    #     print(f"Embeddings step failed, continuing without semantic filter: {e}")
+    #     kept = candidates
+    # relevant_threads = []
+    # if keyword:
+    #     triage_agent = agents.email_triage_agent(keyword)
+    # else:
+    #     triage_agent = None
+    # for c in kept:
+    #     subject = c["subject"]
+    #     text = c["text"]
+    #     if triage_agent:
+    #         alias_hint = ", ".join(alias_phrases[:8])
+    #         sim_hint = f"Similarity: {c.get('semantic_score', 0.0):.2f}" if "semantic_score" in c else ""
+    #         triage_desc = (
+    #             f"Determine if this email is about '{keyword}' or its variations.\n"
+    #             f"Known aliases: {alias_hint}\n{sim_hint}\n\n"
+    #             f"Subject: {subject}\n\nBody Excerpt: {text[:1500]}"
+    #         )
+    #         triage_task = Task(
+    #             description=triage_desc,
+    #             expected_output="YES or NO",
+    #             agent=triage_agent
+    #         )
+    #         crew = Crew(agents=[triage_agent], tasks=[triage_task], process=Process.sequential)
+    #         outcome = str(crew.kickoff()).strip().upper()
+    #         if outcome.startswith("NO"):
+    #             continue
+    #     relevant_threads.append({
+    #         "id": c["id"],
+    #         "subject": subject or "No Subject",
+    #         "sender": c["sender"] or "Unknown Sender",
+    #         "body": c["text"]
+    #     })
+    # return relevant_threads
 
 def analyze_thread_content(thread_id: str):
     service = ensure_gmail_service()
@@ -453,22 +797,30 @@ def analyze_thread_content(thread_id: str):
 
     task = Task(
         description=(
-            "Analyze the provided email thread content. Your final answer MUST strictly follow this template:\n\n"
+            "You are given a single email thread. Read every email carefully and produce a comprehensive, well-structured analysis.\n\n"
+            "Rules:\n"
+            "- Always return the sections below in the exact order and with the exact headings.\n"
+            "- If the thread has only one email, do NOT write 'The first email says'. Write a direct summary instead.\n"
+            "- Be specific. Use concrete details (who, what, when, where, why) from the thread.\n"
+            "- If dates or times are ambiguous, infer the most likely time window and note uncertainty.\n"
+            "- Expand the Final Conclusion into 3-6 detailed sentences covering outcomes, next steps, blockers, decisions, and owners.\n"
+            "- Extract product information whenever present. If absent, return 'Unknown' and a plausible domain.\n"
+            "- Use bullet points for lists. Keep tone concise and professional.\n\n"
+            "Return exactly this template and fill it thoroughly:\n\n"
             "**Email Summaries:**\n"
-            "- [Summary of Email 1]\n"
-            "- [Summary of Email 2]\n\n"
+            "- [One bullet per email in chronological order. Include sender, intent, key facts, and explicit asks/decisions.]\n\n"
             "**Meeting Agenda:**\n"
-            "- [Extracted Meeting Agenda]\n\n"
+            "- [Bullet list of agenda items, discussion topics, action items, blockers, owners]\n\n"
             "**Meeting Date & Time:**\n"
-            "- [Extracted Date and Time]\n\n"
+            "- [All explicit or implied dates/times with timezone if present; otherwise note 'unspecified']\n\n"
             "**Final Conclusion:**\n"
-            "- [Overall summary of the thread's conclusion]\n\n"
-            "**Product Name:** [The specific product name identified]\n"
-            "**Product Domain:** [The general domain of the product]\n\n"
-            f"--- EMAIL THREAD CONTENT ---\n{full_email_thread_text}"
+            "- [3-6 sentences summarizing the outcome, context, decisions, stakeholders, next steps, and deadlines. Avoid 'first email says' phrasing.]\n\n"
+            "**Product Name:** [If present; else 'Unknown']\n"
+            "**Product Domain:** [If present; else best-guess domain, e.g., 'SaaS', 'HR tech', 'payments']\n\n"
+            f"--- EMAIL THREAD CONTENT (verbatim) ---\n{full_email_thread_text}"
         ),
         expected_output=(
-            "A structured summary that strictly follows the provided template, including the 'Product Name' and 'Product Domain' labels."
+            "A detailed and strictly structured report that follows the template, with a multi-sentence Final Conclusion and no 'first email says' phrasing when only one email exists."
         ),
         agent=analysis_agent
     )
@@ -572,17 +924,139 @@ def analyze_multiple_threads(thread_ids: list):
 
 
 def generate_product_dossier(product_name: str, product_domain: str):
-    dossier_agent = agents.product_dossier_creator(product_name, product_domain)
+    """
+    Produce a product dossier using local product knowledge whenever available.
+    Returns a dict { "dossier": <string> } where the dossier is markdown text.
+    """
+    # Get internal product context (may be empty)
+    product_context = read_local_product_knowledge(product_name) if product_name else ""
+
+    dossier_agent = agents.product_dossier_creator(product_name or "Unknown Product", product_domain or "general product")
+
+    # Build task description that *forces* the agent to use the PRODUCT KNOWLEDGE block only.
+    task_desc = (
+        f"Create a comprehensive product dossier for '{product_name}' ({product_domain}).\n\n"
+        "Return MARKDOWN only, with the exact headings (in this order):\n"
+        "# Product Dossier: {name}\n"
+        "## Executive Summary\n"
+        "## Overview\n"
+        "## Core Features\n"
+        "## Key Benefits\n"
+        "## Target Users & Use Cases\n"
+        "## Integrations & Compatibility\n"
+        "## Security & Compliance\n"
+        "## Pricing & Packaging\n"
+        "## Competitive Positioning & Differentiators\n"
+        "## Sales / Implementation Talking Points\n\n"
+        "PRODUCT KNOWLEDGE START\n"
+        f"{product_context or 'Not available in internal docs.'}\n"
+        "PRODUCT KNOWLEDGE END\n\n"
+        "Use only the PRODUCT KNOWLEDGE section above to write the dossier. If a section is missing in the internal docs, write 'Not available in internal docs.' for that section. "
+        "Do NOT invent facts or include placeholders like 'Client Details will be populated'."
+    ).replace("{name}", product_name or "Unnamed Product")
+
     task = Task(
-        description=f"Create a comprehensive product dossier for \'{product_name}\' which is in the \'{product_domain}\' domain.",
-        expected_output=f"A detailed and well-structured product dossier for {product_name}.",
+        description=task_desc,
+        expected_output="Markdown product dossier with the headings specified above.",
         agent=dossier_agent,
     )
+
     crew = Crew(agents=[dossier_agent], tasks=[task], process=Process.sequential)
     dossier_output = crew.kickoff()
 
     return {
         "dossier": str(dossier_output)
+    }
+
+
+
+def generate_email_dossier_from_analysis(analysis_payload: dict):
+    """
+    Generate a dossier from analysis (meeting flow + product dossier).
+    Returns: { "meeting_flow": str, "product_dossier": str, "product_name": str, "product_domain": str }
+    """
+    try:
+        structured = analysis_payload.get("structured_analysis") if isinstance(analysis_payload, dict) else None
+        raw = analysis_payload.get("raw_analysis") or analysis_payload.get("analysis") if isinstance(analysis_payload, dict) else None
+    except Exception:
+        structured, raw = None, None
+
+    # Build source bundle
+    source_sections: list[str] = []
+    if structured:
+        try:
+            source_sections.append("STRUCTURED ANALYSIS:\n" + json.dumps(structured, indent=2))
+        except Exception:
+            source_sections.append("STRUCTURED ANALYSIS (unserializable) provided")
+    if raw:
+        source_sections.append("RAW ANALYSIS:\n" + str(raw))
+
+    # Extract product name/domain if present
+    product_name = None
+    product_domain = None
+    try:
+        if isinstance(analysis_payload, dict):
+            product_name = analysis_payload.get("product_name")
+            product_domain = analysis_payload.get("product_domain")
+        if not product_name and isinstance(structured, dict):
+            product_name = structured.get("product_name")
+            product_domain = structured.get("product_domain")
+    except Exception:
+        product_name = product_name or None
+        product_domain = product_domain or None
+
+    product_context = read_local_product_knowledge(product_name) if product_name else ""
+
+    source_text = "\n\n".join([s for s in source_sections if s]).strip() or "No analysis content provided."
+    if product_context:
+        source_text = f"{source_text}\n\nPRODUCT CONTEXT (from local files for '{product_name}'):\n{product_context}"
+
+    # Create a meeting flow task that requires exact markdown headings (so front-end can render reliably)
+    meeting_flow_agent = agents.meeting_flow_writer()
+    meeting_task_desc = (
+        "You are generating the 'Meeting Flow' section of an Email Dossier.\n\n"
+        "Return MARKDOWN only with the exact headings and order below. Use the analysis as primary source; use PRODUCT CONTEXT only to help frame the discussion (do not invent facts):\n\n"
+        "# Meeting Flow\n"
+        "## Objectives\n"
+        "- [Concise objectives of the meeting]\n\n"
+        "## Context\n"
+        "- [One-paragraph contextual summary; include product reference if present]\n\n"
+        "## Key Discussion Points\n"
+        "- [bulleted list of main topics]\n\n"
+        "## Decisions\n"
+        "- [explicit decisions made, owners if stated]\n\n"
+        "## Blockers\n"
+        "- [open issues or risks]\n\n"
+        "## Next Steps & Owners\n"
+        "- [Action — Owner — (due date if any)]\n\n"
+        "## Suggested Improvements (to improve the meeting flow/process)\n"
+        "- [short bullets]\n\n"
+        f"SOURCE MATERIAL START\n{source_text}\nSOURCE MATERIAL END"
+    )
+
+    task = Task(
+        description=meeting_task_desc,
+        expected_output="A meeting flow in markdown with the exact headings specified above.",
+        agent=meeting_flow_agent,
+    )
+
+    crew = Crew(agents=[meeting_flow_agent], tasks=[task], process=Process.sequential)
+    flow_output = crew.kickoff()
+
+    # Generate a product dossier if we have a product name (else return empty string)
+    product_dossier_text = ""
+    if product_name and product_name.lower() not in {"unknown", "unknown product", ""}:
+        try:
+            pd = generate_product_dossier(product_name, product_domain or "general product")
+            product_dossier_text = pd.get("dossier", "")
+        except Exception as e:
+            product_dossier_text = f"Error generating product dossier: {e}"
+
+    return {
+        "meeting_flow": str(flow_output),
+        "product_dossier": product_dossier_text,
+        "product_name": product_name or "Unknown Product",
+        "product_domain": product_domain or "general product"
     }
 
 
@@ -649,10 +1123,21 @@ def api_analyze_multiple_threads():
 def api_generate_dossier():
     try:
         data = request.get_json()
+        # Prefer new meeting-flow dossier path when analysis payload is provided
+        analysis_payload = data.get('analysis')
+        if analysis_payload:
+            # Allow overriding/passing product_name explicitly alongside analysis
+            explicit_product_name = data.get('product_name')
+            if explicit_product_name and isinstance(analysis_payload, dict):
+                analysis_payload['product_name'] = explicit_product_name
+            dossier = generate_email_dossier_from_analysis(analysis_payload)
+            return jsonify(dossier)
+
+        # Fallback to legacy product dossier generation
         product_name = data.get('product_name')
         product_domain = data.get('product_domain')
         if not product_name or not product_domain:
-            return jsonify({'error': 'product_name and product_domain are required'}), 400
+            return jsonify({'error': 'analysis or (product_name and product_domain) is required'}), 400
         dossier = generate_product_dossier(product_name, product_domain)
         return jsonify(dossier)
     except Exception as e:

@@ -28,12 +28,21 @@ def get_gmail_service( ):
     service = build("gmail", "v1", credentials=creds)
     return service
 
-def list_email_threads(service, query="", max_results=100):
-    """Lists all threads matching the query."""
+def list_email_threads(service, query: str = "", max_results: int = 100, include_spam_trash: bool = False):
+    """Lists all threads matching the query.
+
+    include_spam_trash: when True, include Spam and Trash in the results (matches Gmail's in:anywhere).
+    """
     threads = []
     page_token = None
     while True:
-        results = service.users().threads().list(userId="me", q=query, includeSpamTrash=False, pageToken=page_token, maxResults=max_results).execute()
+        results = service.users().threads().list(
+            userId="me",
+            q=query,
+            includeSpamTrash=include_spam_trash,
+            pageToken=page_token,
+            maxResults=max_results,
+        ).execute()
         threads.extend(results.get("threads", []))
         page_token = results.get("nextPageToken")
         if not page_token:

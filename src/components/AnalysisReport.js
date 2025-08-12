@@ -127,12 +127,11 @@ const Badge = styled.span`
   border-radius: 999px;
 `;
 
-function AnalysisReport({ structuredAnalysis, rawAnalysis }) {
-  // Hooks must be called unconditionally at the top of the component
+function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
   const [selectedByGroup, setSelectedByGroup] = useState({});
 
   const hasStructured = structuredAnalysis && typeof structuredAnalysis === 'object';
-  if (!hasStructured && !rawAnalysis) return null;
+  if (!hasStructured && !rawAnalysis && !productDossier) return null;
 
   const hasGroups = hasStructured && Array.isArray(structuredAnalysis.groups) && structuredAnalysis.groups.length > 0;
   const globalSummary = (hasStructured && structuredAnalysis.global_summary) || null;
@@ -144,7 +143,6 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis }) {
     (!!structuredAnalysis.final_conclusion)
   );
 
-  // helper: find which thread subjects are referenced inside a text
   const findMatchedSubjects = (text, subjects) => {
     if (!text || !Array.isArray(subjects)) return [];
     const lower = String(text).toLowerCase();
@@ -351,9 +349,15 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis }) {
                 )}
               </>
             ) : null}
+
+            {productDossier && (
+              <Section>
+                <SectionTitle>Product Dossier</SectionTitle>
+                <div dangerouslySetInnerHTML={{ __html: productDossier }} />
+              </Section>
+            )}
           </>
         ) : (
-          // Fallback to raw formatted string/HTML
           <div dangerouslySetInnerHTML={{ __html: rawAnalysis }} />
         )}
       </ReportContent>
