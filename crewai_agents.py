@@ -30,7 +30,7 @@ class MeetingAgents:
                 "Analyze an email thread and produce a structured report with the exact sections: "
                 "Email Summaries, Meeting Agenda, Meeting Date & Time, Final Conclusion, Product Name, Product Domain. "
                 "Summarize every email (chronological), extract actionable agenda items and owners, and capture all explicit or implied dates/times. "
-                "Write a detailed Final Conclusion (3–6 sentences) covering outcomes, decisions, owners, and next steps. "
+                "Write a detailed Final Conclusion (3—6 sentences) covering outcomes, decisions, owners, and next steps. "
                 "If the thread has only one email, do not use phrases like 'the first email says'—write a direct summary."
             ),
             backstory=(
@@ -42,11 +42,31 @@ class MeetingAgents:
             allow_delegation=False,
         )
 
+    def meeting_flow_writer(self):
+        """
+        Agent focused ONLY on meeting flow generation from analysis data.
+        No longer handles product dossier creation.
+        """
+        return Agent(
+            role="Meeting Flow Writer",
+            goal=(
+                "Generate a comprehensive meeting flow document with exact markdown headings. "
+                "Focus on meeting objectives, context, discussion points, decisions, blockers, and next steps. "
+                "Use the analysis as primary source; use PRODUCT CONTEXT only to frame discussions, not invent facts."
+            ),
+            backstory=(
+                "You excel at turning fragmented notes and summaries into a coherent, chronological meeting narrative. "
+                "You avoid speculation and write in clear, professional prose. You focus solely on meeting flow documentation."
+            ),
+            llm=self.azure_llm,
+            verbose=True,
+            allow_delegation=False,
+        )
+
     def product_dossier_creator(self, product_name: str, product_domain: str = ""):
         """
-        Agent intended to produce a dossier using ONLY local/internal product knowledge
-        supplied in the prompt. The Task must include a PRODUCT KNOWLEDGE section and the
-        agent must NOT invent details nor include placeholders like 'Client Details...'.
+        Agent focused ONLY on product dossier creation using local/internal product knowledge.
+        This agent creates comprehensive product documentation from .md files.
         """
         return Agent(
             role="Product Research Analyst",
@@ -68,22 +88,34 @@ class MeetingAgents:
                 "If some sections are not present in the PRODUCT KNOWLEDGE, write 'Not available in internal docs.' for those sections. "
                 "Do NOT include placeholders for client info or speculative claims. Keep tone factual and concise."
             ),
-            backstory="A seasoned researcher who converts internal docs into crisp product dossiers.",
+            backstory=(
+                "You are a seasoned product researcher who specializes in converting internal product documentation "
+                "into crisp, comprehensive product dossiers. You focus exclusively on product features, benefits, "
+                "and technical specifications without mixing in client or meeting details."
+            ),
             llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
 
-    def meeting_flow_writer(self):
+    def client_dossier_creator(self, client_name: str = "", client_domain: str = ""):
+        """
+        Agent focused ONLY on client dossier creation.
+        This will be used for creating client-specific documentation and context.
+        Currently a placeholder for future implementation.
+        """
         return Agent(
-            role="Meeting Flow Writer",
+            role="Client Research Analyst",
             goal=(
-                "Given the provided analysis and optional PRODUCT CONTEXT, produce a meeting flow with exact markdown headings "
-                "and concise bullets. Use the analysis as primary source; use PRODUCT CONTEXT only to frame, not invent facts."
+                f"Create a comprehensive client dossier for '{client_name}' ({client_domain}). "
+                "Focus on client background, industry context, business challenges, decision makers, "
+                "previous interactions, and strategic positioning. Use only verified client information "
+                "from the provided context. Do not invent or speculate about client details."
             ),
             backstory=(
-                "You excel at turning fragmented notes and summaries into a coherent, chronological meeting narrative. "
-                "You avoid speculation and write in clear, professional prose."
+                "You are an expert client researcher who specializes in creating detailed client profiles "
+                "and strategic context documents. You focus on understanding client needs, organizational structure, "
+                "and business challenges to enable more effective client engagement."
             ),
             llm=self.azure_llm,
             verbose=True,

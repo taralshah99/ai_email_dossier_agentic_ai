@@ -15,6 +15,59 @@ import requests
 # --- Load .env variables ---
 load_dotenv()
 
+def ask_perplexity_api(prompt: str):
+    """Call Perplexity API for intensive research"""
+    import requests
+    
+    perplexity_api_key = os.getenv("PERPLEXITY_API_KEY")
+    if not perplexity_api_key:
+        raise RuntimeError("PERPLEXITY_API_KEY not found in environment variables")
+    
+    url = "https://api.perplexity.ai/chat/completions"
+    
+    payload = {
+        "model": "sonar-reasoning",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "max_tokens": 4000,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stream": False
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {perplexity_api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        print(f"Making request to Perplexity API with payload: {payload}")  # Debug
+        response = requests.post(url, json=payload, headers=headers, timeout=300)
+        
+        print(f"Response status: {response.status_code}")  # Debug
+        print(f"Response content: {response.text}")  # Debug
+        
+        response.raise_for_status()
+        
+        data = response.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        
+        return content
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Request exception: {e}")  # Debug
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Response text: {e.response.text}")  # Debug
+        raise RuntimeError(f"Perplexity API request failed: {str(e)}")
+    except Exception as e:
+        print(f"Other exception: {e}")  # Debug
+        raise RuntimeError(f"Error processing Perplexity API response: {str(e)}")
+
+
 # --- LiteLLM / CrewAI Azure LLM Setup ---
 # Must set LiteLLM-compatible env vars:
 os.environ["AZURE_API_KEY"] = os.getenv("AZURE_OPENAI_KEY", "")
@@ -75,99 +128,107 @@ def _slugify(name: str) -> str:
 
 
 def read_local_product_knowledge(product_name: str) -> str:
-    """Read local knowledge for a product.
+    """Read local knowledge for a product from JSON or markdown."""
+    import os
+    import json
 
-    Priority:
-    1) local_knowledge/products/<slug>/*.{md,txt,json,yaml,yml}
-    2) local_knowledge/techify_solutions/product-portfolio.md (extract nearest section)
-    Returns a bounded text blob or empty string.
-    """
     try:
-        # 1) per-product folder (existing behavior)
-        base_dir = os.path.join(os.path.dirname(__file__), "local_knowledge", "products", _slugify(product_name))
-        pieces: list[str] = []
-        if os.path.isdir(base_dir):
-            for root, _, files in os.walk(base_dir):
-                for fn in files:
-                    low = fn.lower()
-                    if not (low.endswith(".md") or low.endswith(".txt") or low.endswith(".json") or low.endswith(".yaml") or low.endswith(".yml")):
-                        continue
-                    full = os.path.join(root, fn)
+        base_dir = os.path.join(os.path.dirname(__file__), "local_knowledge", "products")
+
+        # --- 1) Check per-product folder for JSON file ---
+        slug = _slugify(product_name)
+        prod_dir = os.path.join(base_dir, slug)
+        if os.path.isdir(prod_dir):
+            for fn in os.listdir(prod_dir):
+                if fn.lower().endswith(".json"):
                     try:
-                        with open(full, "r", encoding="utf-8") as f:
-                            content = f.read()
-                        pieces.append(f"# {fn}\n{content[:20000]}")
+                        with open(os.path.join(prod_dir, fn), "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        return json.dumps(data, indent=2)[:60000]
                     except Exception:
-                        continue
-            joined = "\n\n".join(pieces)
-            return joined[:60000] if joined else ""
+                        pass
 
-        # 2) fallback: single product-portfolio.md under techify_solutions
-        fallback = os.path.join(os.path.dirname(__file__), "local_knowledge", "techify_solutions", "product-portfolio.md")
-        if os.path.isfile(fallback):
+        # --- 2) Vendor-specific product-portfolio.json ---
+        vendor_dir = os.path.join(base_dir, product_name.lower().replace(" ", "-"))
+        vendor_json = os.path.join(vendor_dir, "product-portfolio.json")
+        if os.path.isfile(vendor_json):
             try:
-                with open(fallback, "r", encoding="utf-8") as f:
-                    content = f.read()
+                with open(vendor_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return json.dumps(data, indent=2)[:60000]
             except Exception:
-                return ""
+                pass
 
-            if not product_name:
-                return content[:60000]
+        # --- 3) Fallback to techify-solutions/product-portfolio.json ---
+        fallback_json = os.path.join(base_dir, "techify-solutions", "product-portfolio.json")
+        if os.path.isfile(fallback_json):
+            try:
+                with open(fallback_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return json.dumps(data, indent=2)[:60000]
+            except Exception:
+                pass
 
-            # Find all H2 headers (lines starting with '##') with their offsets
-            headers = []
-            for m in re.finditer(r"(?m)^##\s*(.*)$", content):
-                headers.append((m.start(), m.group(1).strip()))
-
-            def normalize_for_match(s: str) -> str:
-                return re.sub(r"[^a-z0-9]", "", (s or "").lower())
-
-            target_norm = normalize_for_match(product_name)
-            # Try exact-ish header match (contains / contained)
-            for idx, (pos, header) in enumerate(headers):
-                header_norm = normalize_for_match(header)
-                if not header_norm:
-                    continue
-
-                # Allow full name match OR any word from product_name match
-                target_words = [normalize_for_match(w) for w in product_name.split() if w]
-                if (
-                    (target_norm and (target_norm in header_norm or header_norm in target_norm))
-                    or any(w and w in header_norm for w in target_words)
-                ):
-                    start = pos
-                    end = len(content)
-                    if idx + 1 < len(headers):
-                        end = headers[idx + 1][0]
-                    section = content[start:end].strip()
-                    return section[:60000]
-
-
-            # Fallback: find first textual match and return the containing section between nearest headers
-            m = re.search(re.escape(product_name), content, flags=re.IGNORECASE)
-            if m:
-                # find previous header boundary
-                prev_header_pos = 0
-                for pos, _ in headers:
-                    if pos < m.start():
-                        prev_header_pos = pos
-                    else:
-                        break
-                # find next header after the found match
-                next_header_pos = len(content)
-                for pos, _ in headers:
-                    if pos > m.start():
-                        next_header_pos = pos
-                        break
-                section = content[prev_header_pos:next_header_pos].strip()
-                return section[:60000]
-
-            # No specific section found — return entire file (bounded)
-            return content[:60000]
+        # --- 4) Fallback to markdown extraction ---
+        fallback_md = os.path.join(base_dir, "techify-solutions", "product-portfolio.md")
+        if os.path.isfile(fallback_md):
+            try:
+                with open(fallback_md, "r", encoding="utf-8") as f:
+                    content = f.read()
+                return _extract_md_section(content, product_name)
+            except Exception:
+                pass
 
         return ""
     except Exception:
         return ""
+
+def _extract_md_section(content: str, product_name: str) -> str:
+    """Extract the relevant section from a markdown file based on product_name."""
+    import re
+    headers = [(m.start(), m.group(1).strip()) for m in re.finditer(r"(?m)^##\s*(.*)$", content)]
+
+    def normalize_for_match(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+    target_norm = normalize_for_match(product_name)
+    target_words = [normalize_for_match(w) for w in product_name.split() if w]
+    loose_pattern = re.sub(r'[^a-z0-9]', r'.*', (product_name or "").strip())
+    loose_regex = re.compile(loose_pattern, re.IGNORECASE)
+
+    for idx, (pos, header) in enumerate(headers):
+        header_clean = re.sub(r"^\d+\.\s*", "", header)
+        header_norm = normalize_for_match(header_clean)
+        if not header_norm:
+            continue
+        if (
+            (target_norm and (target_norm in header_norm or header_norm in target_norm))
+            or any(w and w in header_norm for w in target_words)
+            or header_norm in target_norm
+            or loose_regex.search(header_clean)
+        ):
+            start = pos
+            end = len(content)
+            if idx + 1 < len(headers):
+                end = headers[idx + 1][0]
+            return content[start:end].strip()[:60000]
+
+    m = loose_regex.search(content)
+    if m:
+        prev_header_pos = 0
+        for pos, _ in headers:
+            if pos < m.start():
+                prev_header_pos = pos
+            else:
+                break
+        next_header_pos = len(content)
+        for pos, _ in headers:
+            if pos > m.start():
+                next_header_pos = pos
+                break
+        return content[prev_header_pos:next_header_pos].strip()[:60000]
+
+    return content[:60000]
 
 
 def _extract_section(text: str, header_variants: list[str]) -> str:
@@ -630,7 +691,7 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
 
         # Fetch a limited number of candidate threads and post-filter locally by substring
         # Limit how many candidates we even list to avoid long runtimes
-        max_candidates = int(os.getenv("BODY_SUBSTRING_AUGMENT_CANDIDATES", "1000"))
+        max_candidates = int(os.getenv("BODY_SUBSTRING_AUGMENT_CANDIDATES", "350"))
         candidates: list[dict] = []
         page_token = None
         while True:
@@ -644,7 +705,7 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
                 break
         kw_lower = str(keyword).lower()
         # Safety bound on additional processing
-        max_extra = int(os.getenv("BODY_SUBSTRING_AUGMENT_MAX", "2000"))
+        max_extra = int(os.getenv("BODY_SUBSTRING_AUGMENT_MAX", "700"))
         checked = 0
         for t in candidates:
             if checked >= max_extra:
@@ -682,106 +743,14 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
 
     return relevant_threads
 
-    # --- ORIGINAL AI-BASED FILTERING LOGIC (COMMENTED OUT) ---
-    # The following block is preserved for reference but intentionally disabled.
-    #
-    # 1) Build alias phrases (exact phrases only)
-    # aliases = expand_keyword_aliases(keyword) if keyword else []
-    # alias_phrases = aliases if aliases else ([keyword] if keyword else [])
-    #
-    # 2) Run separate Gmail searches per alias phrase; union thread IDs
-    # thread_ids = set()
-    # for phrase in alias_phrases if alias_phrases else [None]:
-    #     search_parts = [f"after:{start_date} before:{end_date}"]
-    #     if from_email:
-    #         search_parts.append(f"from:{from_email}")
-    #     if phrase:
-    #         if " " in phrase:
-    #             search_parts.append(f'"{phrase}"')
-    #         else:
-    #             search_parts.append(phrase)
-    #     if query:
-    #         search_parts.append(query)
-    #     search_query = " ".join(search_parts)
-    #     threads_page = list_email_threads(service, query=search_query)
-    #     for t in threads_page:
-    #         if t.get("id"):
-    #             thread_ids.add(t["id"])
-    # if not thread_ids:
-    #     return []
-    # candidates = []
-    # for thread_id in thread_ids:
-    #     subject, sender = get_thread_subject_and_sender(service, thread_id)
-    #     messages = get_email_thread(service, thread_id)
-    #     snippet = ""
-    #     if messages:
-    #         msg = messages[0]
-    #         if "snippet" in msg:
-    #             snippet = msg["snippet"]
-    #         elif msg.get("payload", {}).get("parts"):
-    #             for part in msg["payload"]["parts"]:
-    #                 if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-    #                     snippet = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
-    #                     break
-    #     candidates.append({
-    #         "id": thread_id,
-    #         "subject": subject or "",
-    #         "sender": sender or "",
-    #         "text": f"{subject or ''}\n{snippet or ''}".strip()
-    #     })
-    # kept = candidates
-    # try:
-    #     if alias_phrases and _azure_embeddings_available():
-    #         query_vectors = get_azure_embeddings(alias_phrases)
-    #         doc_vectors = get_azure_embeddings([c["text"] for c in candidates])
-    #         scored = []
-    #         for c, dv in zip(candidates, doc_vectors):
-    #             max_sim = max((cosine_similarity(dv, qv) for qv in query_vectors), default=0.0)
-    #             c["semantic_score"] = max_sim
-    #             scored.append(c)
-    #         threshold = float(os.getenv("SEMANTIC_SIM_THRESHOLD", "0.75"))
-    #         top_k = int(os.getenv("SEMANTIC_TOP_K", "60"))
-    #         scored.sort(key=lambda x: x.get("semantic_score", 0.0), reverse=True)
-    #         kept = [s for s in scored if s.get("semantic_score", 0.0) >= threshold][:top_k]
-    # except Exception as e:
-    #     print(f"Embeddings step failed, continuing without semantic filter: {e}")
-    #     kept = candidates
-    # relevant_threads = []
-    # if keyword:
-    #     triage_agent = agents.email_triage_agent(keyword)
-    # else:
-    #     triage_agent = None
-    # for c in kept:
-    #     subject = c["subject"]
-    #     text = c["text"]
-    #     if triage_agent:
-    #         alias_hint = ", ".join(alias_phrases[:8])
-    #         sim_hint = f"Similarity: {c.get('semantic_score', 0.0):.2f}" if "semantic_score" in c else ""
-    #         triage_desc = (
-    #             f"Determine if this email is about '{keyword}' or its variations.\n"
-    #             f"Known aliases: {alias_hint}\n{sim_hint}\n\n"
-    #             f"Subject: {subject}\n\nBody Excerpt: {text[:1500]}"
-    #         )
-    #         triage_task = Task(
-    #             description=triage_desc,
-    #             expected_output="YES or NO",
-    #             agent=triage_agent
-    #         )
-    #         crew = Crew(agents=[triage_agent], tasks=[triage_task], process=Process.sequential)
-    #         outcome = str(crew.kickoff()).strip().upper()
-    #         if outcome.startswith("NO"):
-    #             continue
-    #     relevant_threads.append({
-    #         "id": c["id"],
-    #         "subject": subject or "No Subject",
-    #         "sender": c["sender"] or "Unknown Sender",
-    #         "body": c["text"]
-    #     })
-    # return relevant_threads
 
 def analyze_thread_content(thread_id: str):
     service = ensure_gmail_service()
     messages = get_email_thread(service, thread_id)
+
+    # NEW: Fetch subject & sender
+    subject, sender = get_thread_subject_and_sender(service, thread_id)
+
     email_content = []
     for msg in messages:
         if "snippet" in msg:
@@ -791,7 +760,8 @@ def analyze_thread_content(thread_id: str):
                 if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
                     email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
 
-    full_email_thread_text = "\n".join(email_content)
+    # NEW: Prepend subject to the email thread text
+    full_email_thread_text = f"Subject: {subject or 'No Subject'}\n" + "\n".join(email_content)
 
     analysis_agent = agents.meeting_agenda_extractor()
 
@@ -824,6 +794,7 @@ def analyze_thread_content(thread_id: str):
         ),
         agent=analysis_agent
     )
+
 
     crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
     analysis_output = crew.kickoff()
@@ -925,15 +896,15 @@ def analyze_multiple_threads(thread_ids: list):
 
 def generate_product_dossier(product_name: str, product_domain: str):
     """
-    Produce a product dossier using local product knowledge whenever available.
-    Returns a dict { "dossier": <string> } where the dossier is markdown text.
+    Generate ONLY the product dossier using local product knowledge from .md files.
+    Returns: { "product_dossier": str }
     """
-    # Get internal product context (may be empty)
+    # Get internal product context from .md files
     product_context = read_local_product_knowledge(product_name) if product_name else ""
 
     dossier_agent = agents.product_dossier_creator(product_name or "Unknown Product", product_domain or "general product")
 
-    # Build task description that *forces* the agent to use the PRODUCT KNOWLEDGE block only.
+    # Build task description that forces the agent to use the PRODUCT KNOWLEDGE block only
     task_desc = (
         f"Create a comprehensive product dossier for '{product_name}' ({product_domain}).\n\n"
         "Return MARKDOWN only, with the exact headings (in this order):\n"
@@ -965,15 +936,14 @@ def generate_product_dossier(product_name: str, product_domain: str):
     dossier_output = crew.kickoff()
 
     return {
-        "dossier": str(dossier_output)
+        "product_dossier": str(dossier_output)
     }
 
 
-
-def generate_email_dossier_from_analysis(analysis_payload: dict):
+def generate_meeting_flow_dossier(analysis_payload: dict):
     """
-    Generate a dossier from analysis (meeting flow + product dossier).
-    Returns: { "meeting_flow": str, "product_dossier": str, "product_name": str, "product_domain": str }
+    Generate ONLY the meeting flow section from analysis data.
+    Returns: { "meeting_flow": str, "product_name": str, "product_domain": str }
     """
     try:
         structured = analysis_payload.get("structured_analysis") if isinstance(analysis_payload, dict) else None
@@ -1005,17 +975,14 @@ def generate_email_dossier_from_analysis(analysis_payload: dict):
         product_name = product_name or None
         product_domain = product_domain or None
 
-    product_context = read_local_product_knowledge(product_name) if product_name else ""
-
+    # Prepare source text for LLM (no product details included here)
     source_text = "\n\n".join([s for s in source_sections if s]).strip() or "No analysis content provided."
-    if product_context:
-        source_text = f"{source_text}\n\nPRODUCT CONTEXT (from local files for '{product_name}'):\n{product_context}"
 
-    # Create a meeting flow task that requires exact markdown headings (so front-end can render reliably)
+    # Create a meeting flow task
     meeting_flow_agent = agents.meeting_flow_writer()
     meeting_task_desc = (
         "You are generating the 'Meeting Flow' section of an Email Dossier.\n\n"
-        "Return MARKDOWN only with the exact headings and order below. Use the analysis as primary source; use PRODUCT CONTEXT only to help frame the discussion (do not invent facts):\n\n"
+        "Return MARKDOWN only with the exact headings and order below. Use the analysis as primary source:\n\n"
         "# Meeting Flow\n"
         "## Objectives\n"
         "- [Concise objectives of the meeting]\n\n"
@@ -1043,23 +1010,118 @@ def generate_email_dossier_from_analysis(analysis_payload: dict):
     crew = Crew(agents=[meeting_flow_agent], tasks=[task], process=Process.sequential)
     flow_output = crew.kickoff()
 
-    # Generate a product dossier if we have a product name (else return empty string)
-    product_dossier_text = ""
-    if product_name and product_name.lower() not in {"unknown", "unknown product", ""}:
-        try:
-            pd = generate_product_dossier(product_name, product_domain or "general product")
-            product_dossier_text = pd.get("dossier", "")
-        except Exception as e:
-            product_dossier_text = f"Error generating product dossier: {e}"
-
     return {
         "meeting_flow": str(flow_output),
-        "product_dossier": product_dossier_text,
         "product_name": product_name or "Unknown Product",
         "product_domain": product_domain or "general product"
     }
 
 
+def generate_client_dossier(client_name: str = "Techify Solutions", client_domain: str = "", client_context: str = ""):
+    """
+    Generate client dossier using Perplexity API for intensive research.
+    Returns: { "client_dossier": str }
+    """
+    if not client_name:
+        client_name = "Techify Solutions"
+    
+    # Use Perplexity API for intensive research
+    research_prompt = f"Do intensive research on the company {client_name} and give me a massive report on everything you find."
+    
+    try:
+        # Get research from Perplexity API
+        perplexity_research = ask_perplexity_api(research_prompt)
+        
+        # Use CrewAI agent to structure the research into a proper dossier format
+        client_agent = agents.client_dossier_creator(client_name, client_domain)
+        
+        task_desc = (
+            f"Do intensive research on the company Techify Solutions and give me a massive report on everything you find.\n\n"
+            "Return MARKDOWN only, with the exact headings (in this order):\n"
+            "# Client Dossier: {name}\n"
+            "## Executive Summary\n"
+            "## Company Overview\n"
+            "## Industry & Market Position\n"
+            "## Business Challenges & Pain Points\n"
+            "## Key Decision Makers & Stakeholders\n"
+            "## Previous Interactions & History\n"
+            "## Strategic Opportunities\n"
+            "## Recommended Approach\n\n"
+            "PERPLEXITY RESEARCH START\n"
+            f"{perplexity_research}\n"
+            "PERPLEXITY RESEARCH END\n\n"
+            "ADDITIONAL CONTEXT START\n"
+            f"{client_context or 'No additional context provided.'}\n"
+            "ADDITIONAL CONTEXT END\n\n"
+            "Use the PERPLEXITY RESEARCH and ADDITIONAL CONTEXT sections above to write the dossier. "
+            "Structure the information into the specified sections. If information for a section is missing, "
+            "write 'Information not available in research.' for that section. "
+            "Do NOT invent facts about the client."
+        ).replace("{name}", client_name)
+
+        task = Task(
+            description=task_desc,
+            expected_output="Markdown client dossier with the headings specified above.",
+            agent=client_agent,
+        )
+
+        crew = Crew(agents=[client_agent], tasks=[task], process=Process.sequential)
+        dossier_output = crew.kickoff()
+
+        return {
+            "client_dossier": str(dossier_output)
+        }
+        
+    except Exception as e:
+        return {
+            "client_dossier": f"# Client Dossier: {client_name}\n\nError generating client dossier: {str(e)}\n\nPlease check your Perplexity API key configuration."
+        }
+
+def generate_complete_email_dossier(analysis_payload: dict, include_product: bool = True, include_client: bool = False, client_context: str = ""):
+    """
+    Generate a complete email dossier with all three components:
+    1. Meeting Flow (from analysis)
+    2. Product Dossier (from .md files) - optional
+    3. Client Dossier (from context) - optional
+    
+    Returns: { 
+        "meeting_flow": str, 
+        "product_dossier": str (if included), 
+        "client_dossier": str (if included),
+        "product_name": str, 
+        "product_domain": str 
+    }
+    """
+    result = {}
+    
+    # Always generate meeting flow
+    meeting_result = generate_meeting_flow_dossier(analysis_payload)
+    result.update(meeting_result)
+    
+    # Extract product info for other dossiers
+    product_name = meeting_result.get("product_name", "Unknown Product")
+    product_domain = meeting_result.get("product_domain", "general product")
+    
+    # Optionally generate product dossier
+    if include_product and product_name and product_name.lower() not in {"unknown", "unknown product", ""}:
+        try:
+            product_result = generate_product_dossier(product_name, product_domain)
+            result.update(product_result)
+        except Exception as e:
+            result["product_dossier"] = f"Error generating product dossier: {e}"
+    
+    # Optionally generate client dossier
+    if include_client:
+        try:
+            # Try to extract client name from analysis if not provided
+            client_name = ""  # This would need to be extracted from analysis or provided separately
+            client_result = generate_client_dossier(client_name, "", client_context)
+            result.update(client_result)
+        except Exception as e:
+            result["client_dossier"] = f"Error generating client dossier: {e}"
+    
+    return result
+    
 # --- API Routes ---
 @app.route("/api/find_threads", methods=["POST"])
 def api_find_threads():
@@ -1118,28 +1180,101 @@ def api_analyze_multiple_threads():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route("/api/generate_meeting_dossier", methods=["POST"])
+def api_generate_meeting_dossier():
+    """Generate only the meeting flow dossier from analysis"""
+    try:
+        data = request.get_json()
+        analysis_payload = data.get('analysis')
+        if not analysis_payload:
+            return jsonify({'error': 'analysis payload is required'}), 400
+        
+        result = generate_meeting_flow_dossier(analysis_payload)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/generate_product_dossier", methods=["POST"])
+def api_generate_product_dossier():
+    """Generate only the product dossier from .md files"""
+    try:
+        data = request.get_json()
+        product_name = data.get('product_name')
+        product_domain = data.get('product_domain', 'general product')
+        
+        if not product_name:
+            return jsonify({'error': 'product_name is required'}), 400
+        
+        result = generate_product_dossier(product_name, product_domain)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/generate_client_dossier", methods=["POST"])
+def api_generate_client_dossier():
+    """Generate only the client dossier (placeholder for future implementation)"""
+    try:
+        data = request.get_json()
+        client_name = data.get('client_name', '')
+        client_domain = data.get('client_domain', '')
+        client_context = data.get('client_context', '')
+        
+        result = generate_client_dossier(client_name, client_domain, client_context)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route("/api/generate_dossier", methods=["POST"])
 def api_generate_dossier():
+    """
+    Updated main dossier endpoint - now supports generating complete dossier with all 3 components
+    or individual components based on parameters
+    """
     try:
         data = request.get_json()
-        # Prefer new meeting-flow dossier path when analysis payload is provided
-        analysis_payload = data.get('analysis')
-        if analysis_payload:
-            # Allow overriding/passing product_name explicitly alongside analysis
-            explicit_product_name = data.get('product_name')
-            if explicit_product_name and isinstance(analysis_payload, dict):
-                analysis_payload['product_name'] = explicit_product_name
-            dossier = generate_email_dossier_from_analysis(analysis_payload)
-            return jsonify(dossier)
-
-        # Fallback to legacy product dossier generation
-        product_name = data.get('product_name')
-        product_domain = data.get('product_domain')
-        if not product_name or not product_domain:
-            return jsonify({'error': 'analysis or (product_name and product_domain) is required'}), 400
-        dossier = generate_product_dossier(product_name, product_domain)
-        return jsonify(dossier)
+        
+        # Check what type of dossier generation is requested
+        dossier_type = data.get('type', 'complete')  # 'complete', 'meeting', 'product', 'client'
+        
+        if dossier_type == 'meeting':
+            analysis_payload = data.get('analysis')
+            if not analysis_payload:
+                return jsonify({'error': 'analysis payload is required for meeting dossier'}), 400
+            result = generate_meeting_flow_dossier(analysis_payload)
+            
+        elif dossier_type == 'product':
+            product_name = data.get('product_name')
+            product_domain = data.get('product_domain', 'general product')
+            if not product_name:
+                return jsonify({'error': 'product_name is required for product dossier'}), 400
+            result = generate_product_dossier(product_name, product_domain)
+            
+        elif dossier_type == 'client':
+            client_name = data.get('client_name', '')
+            client_domain = data.get('client_domain', '')
+            client_context = data.get('client_context', '')
+            result = generate_client_dossier(client_name, client_domain, client_context)
+            
+        else:  # 'complete' or default
+            analysis_payload = data.get('analysis')
+            if not analysis_payload:
+                return jsonify({'error': 'analysis payload is required for complete dossier'}), 400
+            
+            include_product = data.get('include_product', True)
+            include_client = data.get('include_client', False)
+            client_context = data.get('client_context', '')
+            
+            result = generate_complete_email_dossier(
+                analysis_payload, 
+                include_product=include_product, 
+                include_client=include_client, 
+                client_context=client_context
+            )
+        
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

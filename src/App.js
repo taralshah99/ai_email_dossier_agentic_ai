@@ -264,6 +264,12 @@ function App() {
   const [keywordError, setKeywordError] = useState(false);
   const [isGeneratingDossier, setIsGeneratingDossier] = useState(false);
   const [dossier, setDossier] = useState(null);
+  const [meetingDossier, setMeetingDossier] = useState(null);
+  const [productDossier, setProductDossier] = useState(null);
+  const [clientDossier, setClientDossier] = useState(null);
+  const [isGeneratingMeeting, setIsGeneratingMeeting] = useState(false);
+  const [isGeneratingProduct, setIsGeneratingProduct] = useState(false);
+  const [isGeneratingClient, setIsGeneratingClient] = useState(false);
 
   const handleSearch = async () => {
     setIsLoading(true);
@@ -274,6 +280,9 @@ function App() {
     setAnalysisResults(null);
     setDossier(null);
     setKeywordError(false);
+    setMeetingDossier(null);
+    setProductDossier(null);
+    setClientDossier(null);
 
     // Make keyword compulsory
     if (!keyword.trim()) {
@@ -355,26 +364,138 @@ function App() {
     }
   };
 
-  const handleGenerateDossier = async () => {
+  const handleGenerateMeetingDossier = async () => {
     if (!analysisResults) {
-      setError('Analyze threads first to generate a dossier.');
+      setError('Analyze threads first to generate a meeting dossier.');
       return;
     }
-    setIsGeneratingDossier(true);
+    setIsGeneratingMeeting(true);
     setError('');
     try {
-      const response = await axios.post('/api/generate_dossier', {
+      const response = await axios.post('/api/generate_meeting_dossier', {
         analysis: {
           structured_analysis: analysisResults.structured_analysis,
-          raw_analysis: analysisResults.analysis
+          raw_analysis: analysisResults.analysis,
+          product_name: analysisResults.product_name,
+          product_domain: analysisResults.product_domain
         }
       });
-      setDossier(response.data || null);
+      setMeetingDossier(response.data || null);
     } catch (e) {
-      console.error('Error generating dossier:', e);
-      setError('An error occurred while generating the dossier.');
+      console.error('Error generating meeting dossier:', e);
+      setError('An error occurred while generating the meeting dossier.');
     } finally {
-      setIsGeneratingDossier(false);
+      setIsGeneratingMeeting(false);
+    }
+  };
+  
+  const handleGenerateProductDossier = async () => {
+    if (!analysisResults || !analysisResults.product_name || analysisResults.product_name === 'Unknown Product') {
+      setError('Product information is required to generate a product dossier.');
+      return;
+    }
+    setIsGeneratingProduct(true);
+    setError('');
+    try {
+      const response = await axios.post('/api/generate_product_dossier', {
+        product_name: analysisResults.product_name,
+        product_domain: analysisResults.product_domain || 'general product'
+      });
+      setProductDossier(response.data || null);
+    } catch (e) {
+      console.error('Error generating product dossier:', e);
+      setError('An error occurred while generating the product dossier.');
+    } finally {
+      setIsGeneratingProduct(false);
+    }
+  };
+  
+  const handleGenerateClientDossier = async () => {
+    setIsGeneratingClient(true);
+    setError('');
+    try {
+      const response = await axios.post('/api/generate_client_dossier', {
+        client_name: 'Techify Solutions',
+        client_domain: 'Technology Solutions',
+        client_context: ''
+      });
+      setClientDossier(response.data || null);
+    } catch (e) {
+      console.error('Error generating client dossier:', e);
+      setError('An error occurred while generating the client dossier.');
+    } finally {
+      setIsGeneratingClient(false);
+    }
+  };
+  
+  const handleGenerateAllDossiers = async () => {
+    if (!analysisResults) {
+      setError('Analyze threads first to generate dossiers.');
+      return;
+    }
+    
+    // Generate all three dossiers in parallel
+    const promises = [];
+    
+    // Always generate meeting dossier
+    setIsGeneratingMeeting(true);
+    promises.push(
+      axios.post('/api/generate_meeting_dossier', {
+        analysis: {
+          structured_analysis: analysisResults.structured_analysis,
+          raw_analysis: analysisResults.analysis,
+          product_name: analysisResults.product_name,
+          product_domain: analysisResults.product_domain
+        }
+      }).then(response => {
+        setMeetingDossier(response.data || null);
+        setIsGeneratingMeeting(false);
+      }).catch(e => {
+        console.error('Error generating meeting dossier:', e);
+        setIsGeneratingMeeting(false);
+        throw e;
+      })
+    );
+    
+    // Generate product dossier if product info is available
+    if (analysisResults.product_name && analysisResults.product_name !== 'Unknown Product') {
+      setIsGeneratingProduct(true);
+      promises.push(
+        axios.post('/api/generate_product_dossier', {
+          product_name: analysisResults.product_name,
+          product_domain: analysisResults.product_domain || 'general product'
+        }).then(response => {
+          setProductDossier(response.data || null);
+          setIsGeneratingProduct(false);
+        }).catch(e => {
+          console.error('Error generating product dossier:', e);
+          setIsGeneratingProduct(false);
+          throw e;
+        })
+      );
+    }
+    
+    // Always generate client dossier using Perplexity
+    setIsGeneratingClient(true);
+    promises.push(
+      axios.post('/api/generate_client_dossier', {
+        client_name: 'Techify Solutions',
+        client_domain: 'Technology Solutions',
+        client_context: ''
+      }).then(response => {
+        setClientDossier(response.data || null);
+        setIsGeneratingClient(false);
+      }).catch(e => {
+        console.error('Error generating client dossier:', e);
+        setIsGeneratingClient(false);
+        throw e;
+      })
+    );
+    
+    try {
+      await Promise.all(promises);
+    } catch (e) {
+      setError('An error occurred while generating one or more dossiers.');
     }
   };
 
@@ -507,23 +628,89 @@ function App() {
         )}
 
         {analysisResults && (
-          <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginTop: 12 }}>
-            <div style={{ maxWidth: 800, width: '100%' }}>
-              <SearchButton onClick={handleGenerateDossier} disabled={isGeneratingDossier}>
-                {isGeneratingDossier ? (
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 12, gap: 12 }}>
+            <div style={{ maxWidth: 800, width: '100%', display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+              {/* Meeting Dossier Button */}
+              <SearchButton onClick={handleGenerateMeetingDossier} disabled={isGeneratingMeeting}>
+                {isGeneratingMeeting ? (
                   <LoadingSpinner />
                 ) : (
                   <FileText size={18} />
                 )}
-                Generate Dossier
+                Generate Meeting Flow
+              </SearchButton>
+              
+              {/* Product Dossier Button */}
+              <SearchButton 
+                onClick={handleGenerateProductDossier} 
+                disabled={isGeneratingProduct || !analysisResults.product_name || analysisResults.product_name === 'Unknown Product'}
+              >
+                {isGeneratingProduct ? (
+                  <LoadingSpinner />
+                ) : (
+                  <FileText size={18} />
+                )}
+                Generate Product Dossier
+              </SearchButton>
+              
+              {/* Client Dossier Button */}
+              <SearchButton 
+                onClick={handleGenerateClientDossier} 
+                disabled={isGeneratingClient}
+              >
+                {isGeneratingClient ? (
+                  <LoadingSpinner />
+                ) : (
+                  <FileText size={18} />
+                )}
+                Generate Client Dossier
+              </SearchButton>
+              
+              {/* Generate All Button */}
+              <SearchButton 
+                onClick={handleGenerateAllDossiers} 
+                disabled={isGeneratingMeeting || isGeneratingProduct}
+                style={{ gridColumn: '1 / -1' }}
+              >
+                {(isGeneratingMeeting || isGeneratingProduct) ? (
+                  <LoadingSpinner />
+                ) : (
+                  <FileText size={18} />
+                )}
+                Generate All Available Dossiers
               </SearchButton>
             </div>
           </div>
         )}
 
+        {/* Meeting Dossier Display */}
+        {meetingDossier && (
+          <DossierContainer>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Meeting Flow Dossier</h3>
+            <div dangerouslySetInnerHTML={{ __html: meetingDossier.meeting_flow?.replace(/\n/g, '<br>') || '' }} />
+          </DossierContainer>
+        )}
+
+        {/* Product Dossier Display */}
+        {productDossier && (
+          <DossierContainer>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Product Dossier</h3>
+            <div dangerouslySetInnerHTML={{ __html: productDossier.product_dossier?.replace(/\n/g, '<br>') || '' }} />
+          </DossierContainer>
+        )}
+
+        {/* Client Dossier Display */}
+        {clientDossier && (
+          <DossierContainer>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Client Dossier</h3>
+            <div dangerouslySetInnerHTML={{ __html: clientDossier.client_dossier?.replace(/\n/g, '<br>') || '' }} />
+          </DossierContainer>
+        )}
+
+        {/* Legacy dossier display - you can remove this old section if you no longer need it */}
         {dossier && (
           <DossierContainer>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Email Dossier</h3>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Legacy Email Dossier</h3>
             <div>
               <h4 style={{ color: '#fff', marginBottom: 8 }}>Meeting Flow</h4>
               <div style={{ marginBottom: 16 }}>

@@ -170,18 +170,34 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
         {hasStructured ? (
           <>
             {(structuredAnalysis.product_name || structuredAnalysis.product_domain) && (
-              <Section>
-                <SectionTitle>Product</SectionTitle>
-                <div>
-                  {structuredAnalysis.product_name && (
-                    <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
-                  )}
-                  {structuredAnalysis.product_domain && (
-                    <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
-                  )}
-                </div>
-              </Section>
-            )}
+            <Section>
+              <SectionTitle>Product</SectionTitle>
+              <div>
+                {structuredAnalysis.product_name && (
+                  <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
+                )}
+                {structuredAnalysis.product_domain && (
+                  <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
+                )}
+              </div>
+            </Section>
+          )}
+
+          {structuredAnalysis.product_dossier && (
+            <Section>
+              <SectionTitle>Product Dossier</SectionTitle>
+              <div dangerouslySetInnerHTML={{ __html: structuredAnalysis.product_dossier }} />
+            </Section>
+          )}
+
+          {structuredAnalysis.product_details && (
+            <Section>
+              <SectionTitle>Product Details</SectionTitle>
+              <div style={{ whiteSpace: 'pre-wrap' }}>
+                {structuredAnalysis.product_details}
+              </div>
+            </Section>
+          )}
 
             {hasGroups ? (
               <>
