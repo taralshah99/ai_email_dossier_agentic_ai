@@ -92,7 +92,17 @@ const ToggleSnippetButton = styled.button`
   gap: 4px;
   cursor: pointer;
   margin-top: 6px;
+  transition: all 0.15s ease-in-out;
   &:hover { border-color: #ff6666; color: #fff; }
+  
+  &:disabled {
+    background: #333333;
+    color: #888888;
+    border-color: #555555;
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
 `;
 
 const LoadingSpinner = styled.div`
