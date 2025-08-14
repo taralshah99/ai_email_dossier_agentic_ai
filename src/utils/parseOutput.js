@@ -52,9 +52,19 @@ export function formatAnalysisResults(analysis) {
  * Extract product information from analysis
  */
 export function extractProductInfo(analysis) {
-  if (!analysis) return { product_name: 'Unknown', product_domain: 'general product' };
+  if (!analysis) {
+    return { 
+      client_name: 'Unknown Client', 
+      product_name: 'Unknown Product', 
+      product_domain: 'general product' 
+    };
+  }
   
   const text = String(analysis);
+
+  // Extract client name
+  const clientNameMatch = text.match(/Client Name:\s*\**(.+?)\**\s*$/m);
+  const clientName = clientNameMatch ? clientNameMatch[1].trim() : 'Unknown Client';
   
   // Extract product name
   const productNameMatch = text.match(/Product Name:\s*\**(.+?)\**\s*$/m);
@@ -65,6 +75,7 @@ export function extractProductInfo(analysis) {
   const productDomain = productDomainMatch ? productDomainMatch[1].trim() : 'general product';
   
   return {
+    client_name: clientName,
     product_name: productName,
     product_domain: productDomain
   };

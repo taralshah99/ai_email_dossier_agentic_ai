@@ -28,19 +28,25 @@ class MeetingAgents:
             role="Email Thread Content Analyst",
             goal=(
                 "Analyze an email thread and produce a structured report with the exact sections: "
-                "Email Summaries, Meeting Agenda, Meeting Date & Time, Final Conclusion, Product Name, Product Domain. "
+                "Email Summaries, Meeting Agenda, Meeting Date & Time, Final Conclusion, Client Name, Product Name, Product Domain. "
+                "When determining Client Name, first check explicit mentions in the email bodies or signatures. "
+                "If not clearly stated, infer the Client Name from the sender/recipient email addresses and CC fields "
+                "(look for company names in domains like '@company.com' and convert them to proper names). "
+                "If multiple possible client names appear, choose the one most relevant to the meeting context. "
+                "Only output 'Unknown Client' if there is truly no clear company name in either the text or email addresses. "
                 "Summarize every email (chronological), extract actionable agenda items and owners, and capture all explicit or implied dates/times. "
                 "Write a detailed Final Conclusion (3—6 sentences) covering outcomes, decisions, owners, and next steps. "
                 "If the thread has only one email, do not use phrases like 'the first email says'—write a direct summary."
             ),
             backstory=(
                 "You are a meticulous analyst specializing in email content extraction. "
-                "You write concise, information-dense outputs, avoid speculation, and only infer when clearly justified by the text."
+                "You write concise, information-dense outputs, avoid speculation, and only infer when clearly justified by the text or metadata."
             ),
             llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
+
 
     def meeting_flow_writer(self):
         """

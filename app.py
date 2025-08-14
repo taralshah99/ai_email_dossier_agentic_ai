@@ -1,3 +1,4 @@
+from email import message_from_bytes
 import os
 import base64
 import re
@@ -14,6 +15,39 @@ import requests
 
 # --- Load .env variables ---
 load_dotenv()
+
+def format_email_metadata(emails):
+    """Extract From, To, CC addresses and return clean string for prompt."""
+    from_addresses = []
+    to_addresses = []
+    cc_addresses = []
+
+    for email in emails:
+        if "from" in email:
+            from_addresses.append(email["from"])
+        if "to" in email and isinstance(email["to"], list):
+            to_addresses.extend(email["to"])
+        if "cc" in email and isinstance(email["cc"], list):
+            cc_addresses.extend(email["cc"])
+
+    def extract_domain(addr):
+        if "@" in addr:
+            domain = addr.split("@")[-1]
+            base = domain.split(".")[0]
+            return base.replace("-", " ").replace("_", " ").title()
+        return None
+
+    domains = set()
+    for addr in from_addresses + to_addresses + cc_addresses:
+        d = extract_domain(addr)
+        if d:
+            domains.add(d)
+
+    if not domains:
+        return "Email Participants' Companies (from metadata): Unknown"
+
+    return f"Email Participants' Companies (from metadata): {', '.join(domains)}"
+
 
 def ask_perplexity_api(prompt: str):
     """Call Perplexity API for intensive research"""
@@ -302,6 +336,7 @@ def structure_analysis_output(text: str) -> dict:
     - meeting_agenda: list[str]
     - meeting_date_time: list[str]
     - final_conclusion: str
+    - client_name: str
     - product_name: str
     - product_domain: str
 
@@ -354,7 +389,8 @@ def structure_analysis_output(text: str) -> dict:
             "products": global_summary_in.get("products") or [],
         }
 
-        # Derive top-level product_name/domain if available (first product seen)
+        # Derive top-level client/product info if available (first product seen)
+        top_client_name = "Unknown Client"
         top_product_name = "Unknown Product"
         top_product_domain = "general product"
         all_products = []
@@ -365,12 +401,14 @@ def structure_analysis_output(text: str) -> dict:
             all_products.append(p)
         if all_products:
             first = all_products[0]
-            top_product_name = first.get("name") or top_product_name
-            top_product_domain = first.get("domain") or top_product_domain
+            top_client_name = first.get("client_name") or top_client_name
+            top_product_name = first.get("product_name") or top_product_name
+            top_product_domain = first.get("product_domain") or top_product_domain
 
         return {
             "groups": groups_out,
             "global_summary": global_summary_out,
+            "client_name": top_client_name,
             "product_name": top_product_name,
             "product_domain": top_product_domain,
         }
@@ -390,13 +428,22 @@ def structure_analysis_output(text: str) -> dict:
         "final_conclusion": conclusion_raw.strip() if conclusion_raw else "",
     }
 
-    product = parse_product_info(text)
+    # Extract client & product info from markdown text
+    def _extract_field(label, default=None):
+        pattern = rf"{label}:\s*\**(.+?)\**\s*$"
+        match = re.search(pattern, text, re.MULTILINE | re.IGNORECASE)
+        return match.group(1).strip() if match else default
+
+    client_name = _extract_field("Client Name", "Unknown Client")
+    product_name = _extract_field("Product Name", "Unknown Product")
+    product_domain = _extract_field("Product Domain", "general product")
+
     structured.update({
-        "product_name": product["product_name"],
-        "product_domain": product["product_domain"],
+        "client_name": client_name,
+        "product_name": product_name,
+        "product_domain": product_domain,
     })
     return structured
-
 
 # --- Aliases / Embeddings Utilities ---
 def _extract_text_from_message(msg: dict) -> str:
@@ -785,6 +832,7 @@ def analyze_thread_content(thread_id: str):
             "- [All explicit or implied dates/times with timezone if present; otherwise note 'unspecified']\n\n"
             "**Final Conclusion:**\n"
             "- [3-6 sentences summarizing the outcome, context, decisions, stakeholders, next steps, and deadlines. Avoid 'first email says' phrasing.]\n\n"
+            "**Client Name:** [If present; else 'Unknown Client']\n"
             "**Product Name:** [If present; else 'Unknown']\n"
             "**Product Domain:** [If present; else best-guess domain, e.g., 'SaaS', 'HR tech', 'payments']\n\n"
             f"--- EMAIL THREAD CONTENT (verbatim) ---\n{full_email_thread_text}"
@@ -831,8 +879,14 @@ def analyze_multiple_threads(thread_ids: list):
                         email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
 
         thread_text = "\n".join(email_content)
-        all_thread_contents.append(f"=== THREAD: {subject} ===\n{thread_text}")
+
+        # NEW: prepend extracted email metadata for LLM to use in client name inference
+        metadata_str = format_email_metadata(messages)  # thread_emails should be the raw email dicts with from/to/cc
+        thread_text = f"{metadata_str}\n\n{thread_text}"
+
+        all_thread_contents.append(f"=== THREAD: {subject} ===Z\n{thread_text}")
         all_subjects.append(subject)
+
 
     combined_content = "\n\n".join(all_thread_contents)
     analysis_agent = agents.meeting_agenda_extractor()
@@ -849,15 +903,16 @@ def analyze_multiple_threads(thread_ids: list):
         "\n      \"meeting_agenda\": [\"string\"],"
         "\n      \"meeting_date_time\": [\"string\"],"
         "\n      \"final_conclusion\": \"string\","
-        "\n      \"products\": [ { \"name\": \"string\", \"domain\": \"string\" } ]"
+        "\n      \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ]"
         "\n    }"
         "\n  ],"
         "\n  \"global_summary\": {"
         "\n    \"final_conclusion\": \"string\","
-        "\n    \"products\": [ { \"name\": \"string\", \"domain\": \"string\" } ]"
+        "\n    \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ]"
         "\n  }"
         "\n}"
     )
+
 
     task = Task(
         description=(

@@ -174,40 +174,50 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
 
   return (
     <ReportContainer>
-      <ReportTitle>Analysis Report</ReportTitle>
-      <ReportContent>
-        {hasStructured ? (
-          <>
-            {(structuredAnalysis.product_name || structuredAnalysis.product_domain) && (
-            <Section>
-              <SectionTitle>Product</SectionTitle>
-              <div>
-                {structuredAnalysis.product_name && (
-                  <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
-                )}
-                {structuredAnalysis.product_domain && (
-                  <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
-                )}
-              </div>
-            </Section>
-          )}
+  <ReportTitle>Analysis Report</ReportTitle>
+  <ReportContent>
+    {hasStructured ? (
+      <>
+        {/* Client section */}
+        {structuredAnalysis.client_name && (
+          <Section>
+            <SectionTitle>Client</SectionTitle>
+            <div>
+              <p><strong>Name:</strong> {structuredAnalysis.client_name}</p>
+            </div>
+          </Section>
+        )}
 
-          {structuredAnalysis.product_dossier && (
-            <Section>
-              <SectionTitle>Product Dossier</SectionTitle>
-              <div dangerouslySetInnerHTML={{ __html: structuredAnalysis.product_dossier }} />
-            </Section>
-          )}
+        {/* Product section */}
+        {(structuredAnalysis.product_name || structuredAnalysis.product_domain) && (
+          <Section>
+            <SectionTitle>Product</SectionTitle>
+            <div>
+              {structuredAnalysis.product_name && (
+                <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
+              )}
+              {structuredAnalysis.product_domain && (
+                <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
+              )}
+            </div>
+          </Section>
+        )}
 
-          {structuredAnalysis.product_details && (
-            <Section>
-              <SectionTitle>Product Details</SectionTitle>
-              <div style={{ whiteSpace: 'pre-wrap' }}>
-                {structuredAnalysis.product_details}
-              </div>
-            </Section>
-          )}
+        {structuredAnalysis.product_dossier && (
+          <Section>
+            <SectionTitle>Product Dossier</SectionTitle>
+            <div dangerouslySetInnerHTML={{ __html: structuredAnalysis.product_dossier }} />
+          </Section>
+        )}
 
+        {structuredAnalysis.product_details && (
+          <Section>
+            <SectionTitle>Product Details</SectionTitle>
+            <div style={{ whiteSpace: 'pre-wrap' }}>
+              {structuredAnalysis.product_details}
+            </div>
+          </Section>
+        )}
             {hasGroups ? (
               <>
                 {structuredAnalysis.groups.map((group, gIdx) => {
@@ -280,7 +290,9 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
                         <p><strong>Products:</strong></p>
                         <ul>
                           {group.products.map((p, pIdx) => (
-                            <li key={`gp-${gIdx}-${pIdx}`}>{p?.name || 'Unknown'}{p?.domain ? ` — ${p.domain}` : ''}</li>
+                          <li key={`gp-${gIdx}-${pIdx}`}>
+                            {p?.client_name || 'Unknown Client'} — {p?.product_name || 'Unknown Product'}{p?.product_domain ? ` — ${p.product_domain}` : ''}
+                          </li>
                           ))}
                         </ul>
                       </div>
@@ -310,7 +322,9 @@ function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
                         <p><strong>Products:</strong></p>
                         <ul>
                           {globalSummary.products.map((p, idx) => (
-                            <li key={`gs-p-${idx}`}>{p?.name || 'Unknown'}{p?.domain ? ` — ${p.domain}` : ''}</li>
+                          <li key={`gs-p-${idx}`}>
+                            {p?.client_name || 'Unknown Client'} — {p?.product_name || 'Unknown Product'}{p?.product_domain ? ` — ${p.product_domain}` : ''}
+                          </li>
                           ))}
                         </ul>
                       </div>
