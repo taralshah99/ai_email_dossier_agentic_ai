@@ -102,6 +102,15 @@ const Tag = styled.button`
   cursor: pointer;
   transition: all 0.15s ease-in-out;
   &:hover { border-color: #ff6666; }
+  
+  &:disabled {
+    background: #333333;
+    color: #888888;
+    border-color: #555555;
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
 `;
 
 const SubSection = styled.div`

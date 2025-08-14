@@ -126,8 +126,12 @@ const SearchButton = styled.button`
   }
   
   &:disabled {
-    background-color: #666;
+    background: linear-gradient(180deg, #444444 0%, #333333 100%);
+    color: #888888;
     cursor: not-allowed;
+    opacity: 0.6;
+    transform: scale(0.98);
+    transition: all 0.2s ease;
   }
 `;
 
@@ -390,7 +394,7 @@ function App() {
   };
   
   const handleGenerateProductDossier = async () => {
-    if (!analysisResults || !analysisResults.product_name || analysisResults.product_name === 'Unknown Product') {
+    if (!analysisResults || !analysisResults.product_name || analysisResults.product_name.toLowerCase().includes('unknown')) {
       setError('Product information is required to generate a product dossier.');
       return;
     }
@@ -458,7 +462,7 @@ function App() {
     );
     
     // Generate product dossier if product info is available
-    if (analysisResults.product_name && analysisResults.product_name !== 'Unknown Product') {
+    if (analysisResults.product_name && !analysisResults.product_name.toLowerCase().includes('unknown')) {
       setIsGeneratingProduct(true);
       promises.push(
         axios.post('/api/generate_product_dossier', {
@@ -640,18 +644,27 @@ function App() {
                 Generate Meeting Flow
               </SearchButton>
               
-              {/* Product Dossier Button */}
-              <SearchButton 
-                onClick={handleGenerateProductDossier} 
-                disabled={isGeneratingProduct || !analysisResults.product_name || analysisResults.product_name === 'Unknown Product'}
-              >
-                {isGeneratingProduct ? (
-                  <LoadingSpinner />
-                ) : (
-                  <FileText size={18} />
-                )}
-                Generate Product Dossier
-              </SearchButton>
+                             {/* Product Dossier Button */}
+               <SearchButton 
+                 onClick={handleGenerateProductDossier} 
+                 disabled={
+                   isGeneratingProduct || 
+                   !analysisResults.product_name || 
+                   analysisResults.product_name.toLowerCase().includes('unknown')
+                 }
+                 title={
+                   !analysisResults.product_name || analysisResults.product_name.toLowerCase().includes('unknown')
+                     ? 'Product information is required to generate a product dossier'
+                     : 'Generate product dossier'
+                 }
+               >
+                 {isGeneratingProduct ? (
+                   <LoadingSpinner />
+                 ) : (
+                   <FileText size={18} />
+                 )}
+                 Generate Product Dossier
+               </SearchButton>
               
               {/* Client Dossier Button */}
               <SearchButton 
@@ -669,10 +682,11 @@ function App() {
               {/* Generate All Button */}
               <SearchButton 
                 onClick={handleGenerateAllDossiers} 
-                disabled={isGeneratingMeeting || isGeneratingProduct}
+                disabled={isGeneratingMeeting || isGeneratingProduct || isGeneratingClient}
                 style={{ gridColumn: '1 / -1' }}
+                title="Generate meeting, client, and product dossiers (if product is identified)"
               >
-                {(isGeneratingMeeting || isGeneratingProduct) ? (
+                {(isGeneratingMeeting || isGeneratingProduct || isGeneratingClient) ? (
                   <LoadingSpinner />
                 ) : (
                   <FileText size={18} />
