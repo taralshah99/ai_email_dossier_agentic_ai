@@ -1,46 +1,121 @@
 import React, { useMemo, useState } from 'react';
-import styled from 'styled-components';
-import { Check, Mail, ChevronDown, ChevronUp } from 'lucide-react';
+import styled, { keyframes } from 'styled-components';
+import { Check, Mail, ChevronDown, ChevronUp, User, Hash, Eye, EyeOff } from 'lucide-react';
+
+const fadeInUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const ResultsContainer = styled.div`
   width: 100%;
-  max-width: 800px;
-  margin-top: 20px;
+  max-width: 900px;
+  margin-top: var(--space-8);
+  animation: ${fadeInUp} 0.6s ease-out;
+`;
+
+const ResultsHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  background: white;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-sm);
+`;
+
+const ResultsCount = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  
+  .count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    background: var(--primary-100);
+    color: var(--primary-800);
+    border-radius: var(--radius-md);
+    padding: 0 var(--space-2);
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
 `;
 
 const ThreadList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-4);
 `;
 
 const ThreadItem = styled.div`
   display: flex;
   align-items: flex-start;
-  gap: 15px;
-  padding: 15px;
-  background-color: #2a2a2a;
-  border: 1px solid ${props => props.selected ? '#ff4444' : '#404040'};
-  border-radius: 8px;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: white;
+  border: 1px solid ${props => props.selected ? 'var(--primary-300)' : 'var(--gray-200)'};
+  border-radius: var(--radius-xl);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: ${props => props.selected ? 'var(--primary-500)' : 'transparent'};
+    transition: all var(--transition-fast);
+  }
   
   &:hover {
-    border-color: #ff4444;
-    background-color: #333;
+    border-color: var(--primary-300);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+    
+    &::before {
+      background: var(--primary-400);
+    }
+  }
+  
+  &.selected {
+    background: var(--primary-50);
+    border-color: var(--primary-300);
+    
+    &::before {
+      background: var(--primary-500);
+    }
   }
 `;
 
 const Checkbox = styled.button`
   width: 20px;
   height: 20px;
-  border: 2px solid ${props => props.selected ? '#ff4444' : '#666'};
+  border: 2px solid ${props => props.selected ? '#ff8c00' : '#cccccc'};
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  background-color: ${props => props.selected ? '#ff4444' : 'transparent'};
+  background-color: ${props => props.selected ? '#ff8c00' : 'transparent'};
   cursor: pointer;
 `;
 
@@ -51,26 +126,65 @@ const ThreadInfo = styled.div`
 const Subject = styled.h3`
   font-size: 16px;
   font-weight: 500;
-  color: #ffffff;
+  color: #333333;
   margin: 0 0 5px 0;
 `;
 
-const Sender = styled.p`
-  font-size: 14px;
-  color: #888;
-  margin: 0;
+const Sender = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--gray-600);
+  font-weight: 500;
+  
+  svg {
+    width: 14px;
+    height: 14px;
+    color: var(--gray-500);
+  }
 `;
 
-const ProductDossierPreview = styled.div`
-  font-size: 12px;
-  color: #bbb;
-  margin-top: 4px;
-  border-left: 2px solid #444;
-  padding-left: 8px;
-  max-height: 48px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+const MetadataContainer = styled.div`
+  margin-top: 8px;
+  padding: 8px;
+  background-color: #f8f8f8;
+  border-radius: 4px;
+  border-left: 3px solid #ff8c00;
 `;
+
+const MetadataRow = styled.div`
+  display: flex;
+  gap: 16px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
+`;
+
+const MetadataLabel = styled.span`
+  color: #666666;
+  min-width: 80px;
+`;
+
+const MetadataValue = styled.span`
+  color: #333333;
+`;
+
+const ParticipantsList = styled.div`
+  margin-top: 4px;
+`;
+
+const Participant = styled.div`
+  font-size: 11px;
+  color: #666666;
+  margin: 2px 0;
+  padding-left: 12px;
+`;
+
+
 
 const Snippet = styled.p`
   font-size: 13px;
@@ -81,60 +195,137 @@ const Snippet = styled.p`
   text-overflow: ellipsis;
 `;
 
-const ToggleSnippetButton = styled.button`
-  background: transparent;
-  border: 1px solid #444;
-  color: #ddd;
-  border-radius: 6px;
-  padding: 4px 8px;
+
+
+const Controls = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  
+  @media (max-width: 640px) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+`;
+
+const SelectAllControl = styled.label`
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--gray-700);
+  
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--primary-500);
+  }
+`;
+
+const SortSelect = styled.select`
+  padding: var(--space-2) var(--space-3);
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  
+  &:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-100);
+  }
+  
+  &:hover {
+    border-color: var(--gray-400);
+  }
+`;
+
+const ThreadHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+`;
+
+const ThreadMeta = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+`;
+
+const MetaItem = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--gray-600);
+  
+  svg {
+    width: 14px;
+    height: 14px;
+    color: var(--gray-500);
+  }
+`;
+
+// Update Sender to extend MetaItem
+const SenderMeta = styled(MetaItem)`
+  font-weight: 500;
+`;
+
+const ActionButtons = styled.div`
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+`;
+
+const ActionButton = styled.button`
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: white;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  color: var(--gray-700);
+  font-size: 0.75rem;
+  font-weight: 500;
   cursor: pointer;
-  margin-top: 6px;
-  transition: all 0.15s ease-in-out;
-  &:hover { border-color: #ff6666; color: #fff; }
+  transition: all var(--transition-fast);
+  
+  &:hover:not(:disabled) {
+    background: var(--gray-50);
+    border-color: var(--primary-300);
+    color: var(--primary-700);
+  }
   
   &:disabled {
-    background: #333333;
-    color: #888888;
-    border-color: #555555;
+    background: var(--gray-100);
+    color: var(--gray-400);
+    border-color: var(--gray-200);
     cursor: not-allowed;
-    opacity: 0.6;
-    transform: scale(0.95);
   }
-`;
-
-const LoadingSpinner = styled.div`
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 3px solid #ffffff;
-  border-radius: 50%;
-  border-top-color: transparent;
-  animation: spin 1s ease-in-out infinite;
   
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  svg {
+    width: 14px;
+    height: 14px;
   }
 `;
 
-const Toolbar = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-`;
-
-const Actions = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 12px;
-`;
-
-function SearchResults({ results, selectedThreads, onThreadToggle, onAnalyzeSelected, isLoading }) {
+function SearchResults({ results, selectedThreads, onThreadToggle, onProcessSelected, isLoading }) {
   const [sortBy, setSortBy] = useState('subject');
   const [expanded, setExpanded] = useState({});
+  const [showMetadata, setShowMetadata] = useState({});
 
   const sortedResults = useMemo(() => {
     const copy = [...results];
@@ -184,26 +375,78 @@ function SearchResults({ results, selectedThreads, onThreadToggle, onAnalyzeSele
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const toggleMetadata = (id) => {
+    setShowMetadata(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const renderThreadMetadata = (thread) => {
+    // For now, we'll show basic info from the thread object
+    // Later this will be enhanced when we get metadata from the backend
+    const participants = [];
+    
+    // Extract basic participant info from sender
+    if (thread.sender) {
+      participants.push({ email: thread.sender, role: 'sender' });
+    }
+
+    return (
+      <MetadataContainer>
+        <MetadataRow>
+          <MetadataLabel>Thread ID:</MetadataLabel>
+          <MetadataValue>{thread.id}</MetadataValue>
+        </MetadataRow>
+        <MetadataRow>
+          <MetadataLabel>Subject:</MetadataLabel>
+          <MetadataValue>{thread.subject || 'No Subject'}</MetadataValue>
+        </MetadataRow>
+        {participants.length > 0 && (
+          <MetadataRow>
+            <MetadataLabel>Participants:</MetadataLabel>
+            <div>
+              <MetadataValue>{participants.length} participant(s)</MetadataValue>
+              <ParticipantsList>
+                {participants.map((participant, idx) => (
+                  <Participant key={idx}>
+                    • {participant.email} ({participant.role})
+                  </Participant>
+                ))}
+              </ParticipantsList>
+            </div>
+          </MetadataRow>
+        )}
+        <MetadataRow>
+          <MetadataLabel>Preview:</MetadataLabel>
+          <MetadataValue>{thread.body ? 'Content available' : 'No content preview'}</MetadataValue>
+        </MetadataRow>
+      </MetadataContainer>
+    );
+  };
+
   return (
     <ResultsContainer>
-      <Toolbar>
-        <div>{results.length} results</div>
-        <Actions>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+      <ResultsHeader>
+        <ResultsCount>
+          <Mail size={16} />
+          <span className="count">{results.length}</span>
+          {results.length === 1 ? 'result' : 'results'}
+        </ResultsCount>
+        <Controls>
+          <SelectAllControl>
             <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
             Select all
-          </label>
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #404040', borderRadius: 6, padding: '6px 8px' }}>
+          </SelectAllControl>
+          <SortSelect value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
             <option value="subject">Sort by Subject</option>
             <option value="sender">Sort by Sender</option>
-          </select>
-        </Actions>
-      </Toolbar>
+          </SortSelect>
+        </Controls>
+      </ResultsHeader>
       <ThreadList>
         {sortedResults.map(thread => (
           <ThreadItem
             key={thread.id}
             selected={selectedThreads.includes(thread.id)}
+            className={selectedThreads.includes(thread.id) ? 'selected' : ''}
             onClick={() => onThreadToggle(thread.id)}
           >
             <Checkbox
@@ -213,37 +456,56 @@ function SearchResults({ results, selectedThreads, onThreadToggle, onAnalyzeSele
               aria-checked={selectedThreads.includes(thread.id)}
               aria-label={selectedThreads.includes(thread.id) ? 'Deselect thread' : 'Select thread'}
             >
-              {selectedThreads.includes(thread.id) && <Check size={14} />}
+              {selectedThreads.includes(thread.id) && <Check size={16} />}
             </Checkbox>
+            
             <ThreadInfo>
-              <Subject>{thread.subject || 'No Subject'}</Subject>
-              <Sender>{thread.sender || 'Unknown Sender'}</Sender>
+              <ThreadHeader>
+                <Subject>{thread.subject || 'No Subject'}</Subject>
+                <Mail size={18} color="var(--gray-400)" />
+              </ThreadHeader>
+              
+              <ThreadMeta>
+                <SenderMeta>
+                  <User size={14} />
+                  {thread.sender || 'Unknown Sender'}
+                </SenderMeta>
+                <MetaItem>
+                  <Hash size={14} />
+                  ID: {thread.id}
+                </MetaItem>
+              </ThreadMeta>
 
-              {/* New: Product Dossier Preview */}
-              {thread.product_dossier && (
-                <ProductDossierPreview
-                  dangerouslySetInnerHTML={{ __html: thread.product_dossier }}
-                />
-              )}
-
-              {getCleanBody(thread) && (
-                <>
-                  {expanded[thread.id] && (
-                    <Snippet $expanded>
-                      {getPreviewText(thread, true)}
-                    </Snippet>
-                  )}
-                  <ToggleSnippetButton
+              <ActionButtons>
+                <ActionButton
+                  onClick={(e) => { e.stopPropagation(); toggleMetadata(thread.id); }}
+                  aria-label={showMetadata[thread.id] ? 'Hide metadata' : 'Show metadata'}
+                >
+                  {showMetadata[thread.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showMetadata[thread.id] ? 'Hide Details' : 'Show Details'}
+                </ActionButton>
+                
+                {getCleanBody(thread) && (
+                  <ActionButton
                     onClick={(e) => { e.stopPropagation(); toggleExpand(thread.id); }}
-                    aria-label={expanded[thread.id] ? 'Show less' : 'Show more'}
+                    aria-label={expanded[thread.id] ? 'Hide content' : 'Show content'}
                   >
                     {expanded[thread.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                    {expanded[thread.id] ? 'Show less' : 'Show more'}
-                  </ToggleSnippetButton>
-                </>
+                    {expanded[thread.id] ? 'Hide Content' : 'Show Content'}
+                  </ActionButton>
+                )}
+              </ActionButtons>
+
+              {/* Show metadata when toggled */}
+              {showMetadata[thread.id] && renderThreadMetadata(thread)}
+
+              {/* Show content when toggled */}
+              {expanded[thread.id] && getCleanBody(thread) && (
+                <Snippet $expanded>
+                  {getPreviewText(thread, true)}
+                </Snippet>
               )}
             </ThreadInfo>
-            <Mail size={20} color="#666" />
           </ThreadItem>
         ))}
       </ThreadList>

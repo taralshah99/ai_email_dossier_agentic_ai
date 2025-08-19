@@ -1,253 +1,641 @@
 import React, { useState } from 'react';
-import styled from 'styled-components';
-import { Search, Menu, X, Mail, FileText } from 'lucide-react';
+import styled, { keyframes } from 'styled-components';
+import { Search, Mail, FileText, Calendar, User, Filter, Sparkles, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import SearchResults from './components/SearchResults';
 import AnalysisReport from './components/AnalysisReport';
+import MeetingFlowReport from './components/MeetingFlowReport';
+import ClientDossierReport from './components/ClientDossierReport';
+
+// Animations
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const slideDown = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const pulse = keyframes`
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+`;
 
 const AppContainer = styled.div`
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background-color: #1a1a1a;
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-50) 100%);
+  color: var(--gray-800);
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+      radial-gradient(circle at 20% 80%, var(--primary-100) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, var(--primary-100) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: -1;
+  }
 `;
 
 const TopBar = styled.div`
   position: sticky;
   top: 0;
-  z-index: 10;
-  background: linear-gradient(180deg, #2a2a2a 0%, #262626 100%);
-  border-bottom: 1px solid #404040;
-  padding: 16px 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--gray-200);
+  padding: var(--space-6) var(--space-8);
+  box-shadow: var(--shadow-sm);
+  animation: ${slideDown} 0.6s ease-out;
+  
+  @media (max-width: 768px) {
+    padding: var(--space-4) var(--space-5);
+  }
+`;
+
+const SearchSection = styled.div`
+  margin-bottom: var(--space-6);
+`;
+
+const SectionHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+`;
+
+const SectionTitle = styled.h2`
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin: 0;
+`;
+
+const SectionIcon = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--primary-500);
+  border-radius: var(--radius-lg);
+  color: white;
 `;
 
 const FiltersRow = styled.div`
   display: grid;
-  gap: 12px;
-  grid-template-columns: 1fr 1fr 1fr 1fr 1.5fr;
+  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   align-items: end;
   
-  @media (max-width: 1200px) {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
   @media (max-width: 768px) {
     grid-template-columns: 1fr;
+    gap: var(--space-4);
   }
-`;
-
-const BarSection = styled.div``;
-
-const Section = styled.div`
-  margin-bottom: 30px;
-`;
-
-const SectionTitle = styled.h3`
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 15px;
-  color: #ffffff;
 `;
 
 const FormGroup = styled.div`
-  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 `;
 
 const Label = styled.label`
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: #e0e0e0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  
+  svg {
+    width: 16px;
+    height: 16px;
+    color: var(--gray-500);
+  }
+`;
+
+const RequiredIndicator = styled.span`
+  color: var(--error-500);
+  font-weight: 700;
+  margin-left: var(--space-1);
 `;
 
 const Input = styled.input`
   width: 100%;
-  padding: 12px;
-  border: 1px solid #404040;
-  border-radius: 6px;
-  background-color: #2d2d2d;
-  color: #ffffff;
-  font-size: 14px;
+  padding: var(--space-4);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  background-color: white;
+  color: var(--gray-800);
+  font-size: 0.875rem;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
   
   &:focus {
     outline: none;
-    border-color: #ff4444;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-100);
+  }
+  
+  &:hover:not(:focus) {
+    border-color: var(--gray-400);
   }
   
   &::placeholder {
-    color: #888;
+    color: var(--gray-500);
+  }
+  
+  &.error {
+    border-color: var(--error-500);
+    background-color: var(--error-50);
+    
+    &:focus {
+      box-shadow: 0 0 0 3px var(--error-100);
+    }
   }
 `;
 
 const StyledDatePicker = styled(DatePicker)`
   width: 100%;
-  padding: 12px;
-  border: 1px solid #404040;
-  border-radius: 6px;
-  background-color: #2d2d2d;
-  color: #ffffff;
-  font-size: 14px;
+  padding: var(--space-4);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  background-color: white;
+  color: var(--gray-800);
+  font-size: 0.875rem;
+  font-family: var(--font-sans);
   cursor: pointer;
+  transition: all var(--transition-fast);
   
   &:focus {
     outline: none;
-    border-color: #ff4444;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-100);
+  }
+  
+  &:hover:not(:focus) {
+    border-color: var(--gray-400);
   }
   
   &::placeholder {
-    color: #888;
+    color: var(--gray-500);
   }
 `;
 
-const SearchButton = styled.button`
-  width: 100%;
-  padding: 15px;
-  background: linear-gradient(180deg, #ff5a5a 0%, #ff4444 100%);
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
+const DatePickerContainer = styled.div`
+  position: relative;
+`;
+
+const QuickDateButtons = styled.div`
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+`;
+
+const QuickDateButton = styled.button`
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: white;
+  color: var(--gray-700);
   cursor: pointer;
+  transition: all var(--transition-fast);
+  
+  &:hover {
+    background: var(--primary-50);
+    border-color: var(--primary-300);
+    color: var(--primary-700);
+  }
+  
+  &.active {
+    background: var(--primary-500);
+    border-color: var(--primary-500);
+    color: white;
+  }
+`;
+
+const Button = styled.button`
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  transition: background-color 0.2s;
-  margin-top: 20px;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+  overflow: hidden;
   
-  &:hover {
-    background: linear-gradient(180deg, #ff6d6d 0%, #ff5656 100%);
+  &.primary {
+    background: linear-gradient(135deg, var(--primary-500) 0%, var(--primary-600) 100%);
+    color: white;
+    box-shadow: var(--shadow-md);
+    
+    &:hover:not(:disabled) {
+      background: linear-gradient(135deg, var(--primary-600) 0%, var(--primary-700) 100%);
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-2px);
+    }
+    
+    &:active {
+      transform: translateY(0);
+      box-shadow: var(--shadow-md);
+    }
+  }
+  
+  &.secondary {
+    background: white;
+    color: var(--gray-700);
+    border: 1px solid var(--gray-300);
+    
+    &:hover:not(:disabled) {
+      background: var(--gray-50);
+      border-color: var(--gray-400);
+    }
   }
   
   &:disabled {
-    background: linear-gradient(180deg, #444444 0%, #333333 100%);
-    color: #888888;
+    background: var(--gray-200) !important;
+    color: var(--gray-500) !important;
     cursor: not-allowed;
-    opacity: 0.6;
-    transform: scale(0.98);
-    transition: all 0.2s ease;
+    transform: none !important;
+    box-shadow: none !important;
+    border-color: var(--gray-200) !important;
   }
-`;
-
-const MainContent = styled.div`
-  flex: 1;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  overflow-y: auto;
-`;
-
-const Title = styled.h1`
-  font-size: 32px;
-  font-weight: 700;
-  margin-bottom: 20px;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-`;
-
-const TitleIcon = styled.div`
-  width: 40px;
-  height: 40px;
-  background-color: #ff4444;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: bold;
-`;
-
-const Description = styled.div`
-  font-size: 18px;
-  color: #cccccc;
-  margin-bottom: 30px;
-  text-align: center;
-  max-width: 800px;
-  line-height: 1.6;
-`;
-
-const DossierContainer = styled.div`
-  width: 100%;
-  max-width: 800px;
-  margin-top: 20px;
-  padding: 20px;
-  background-color: #2a2a2a;
-  border-radius: 8px;
-  border: 1px solid #404040;
-  color: #e0e0e0;
-  white-space: pre-wrap;
-`;
-
-const ActionsBar = styled.div`
-  position: sticky;
-  bottom: 0;
-  background: #2a2a2a;
-  border-top: 1px solid #404040;
-  padding: 12px 16px;
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  width: 100%;
-`;
-
-const Overlay = styled.div`
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  z-index: 999;
-  display: ${props => props.isOpen ? 'block' : 'none'};
   
-  @media (min-width: 769px) {
-    display: none;
+  &.loading {
+    color: transparent;
+    
+    &::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border: 2px solid currentColor;
+      border-radius: 50%;
+      border-top-color: transparent;
+      animation: spin 1s linear infinite;
+      color: inherit;
+    }
   }
-`;
-
-const LoadingSpinner = styled.div`
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 3px solid #ffffff;
-  border-radius: 50%;
-  border-top-color: transparent;
-  animation: spin 1s ease-in-out infinite;
   
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
 `;
 
-const Alert = styled.div`
-  padding: 12px 16px;
-  border-radius: 6px;
-  margin-bottom: 15px;
+const SearchButton = styled(Button)`
+  width: 100%;
+  padding: var(--space-5) var(--space-6);
+  font-size: 1rem;
+  margin-top: var(--space-5);
+`;
+
+const MainContent = styled.div`
+  flex: 1;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow-y: auto;
+  animation: ${fadeIn} 0.8s ease-out;
+  
+  @media (max-width: 768px) {
+    padding: var(--space-6) var(--space-4);
+  }
+`;
+
+const HeroSection = styled.div`
+  text-align: center;
+  margin-bottom: var(--space-12);
+  max-width: 900px;
+`;
+
+const Title = styled.h1`
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 800;
+  margin-bottom: var(--space-6);
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  justify-content: center;
+  gap: var(--space-4);
+  background: linear-gradient(135deg, var(--gray-800) 0%, var(--primary-600) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+`;
+
+const TitleIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, var(--primary-500) 0%, var(--primary-600) 100%);
+  border-radius: var(--radius-xl);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  box-shadow: var(--shadow-lg);
+  animation: ${pulse} 2s ease-in-out infinite;
+`;
+
+const Description = styled.p`
+  font-size: 1.125rem;
+  color: var(--gray-600);
+  line-height: 1.7;
+  max-width: 600px;
+  margin: 0 auto var(--space-8);
+`;
+
+const DossierContainer = styled.div`
+  width: 100%;
+  max-width: 900px;
+  margin-top: var(--space-8);
+  padding: var(--space-8);
+  background: white;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-lg);
+  color: var(--gray-800);
+  white-space: pre-wrap;
+  line-height: 1.6;
+  animation: ${fadeIn} 0.6s ease-out;
+  
+  h3 {
+    color: var(--gray-800) !important;
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: var(--space-4) !important;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    
+    &::before {
+      content: '';
+      width: 4px;
+      height: 20px;
+      background: var(--primary-500);
+      border-radius: 2px;
+    }
+  }
+`;
+
+const ActionsBar = styled.div`
+  position: sticky;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid var(--gray-200);
+  padding: var(--space-4) var(--space-6);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+`;
+
+const Alert = styled.div`
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  animation: ${slideDown} 0.4s ease-out;
   
   &.error {
-    background-color: #2a1a1a;
-    border: 1px solid #ff4444;
-    color: #ff6666;
+    background-color: var(--error-50);
+    border: 1px solid var(--error-200);
+    color: var(--error-800);
+    
+    svg {
+      color: var(--error-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
   }
   
   &.warning {
-    background-color: #2a2a1a;
-    border: 1px solid #ffaa00;
-    color: #ffcc00;
+    background-color: var(--warning-50);
+    border: 1px solid var(--warning-200);
+    color: var(--warning-800);
+    
+    svg {
+      color: var(--warning-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+  }
+  
+  &.success {
+    background-color: var(--success-50);
+    border: 1px solid var(--success-200);
+    color: var(--success-800);
+    
+    svg {
+      color: var(--success-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+  }
+`;
+
+const ButtonGrid = styled.div`
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  width: 100%;
+  max-width: 900px;
+  margin-top: var(--space-6);
+  
+  &.full-width {
+    .full-width-button {
+      grid-column: 1 / -1;
+    }
+  }
+`;
+
+const ClientSelector = styled.div`
+  width: 100%;
+  max-width: 900px;
+  margin-top: var(--space-6);
+  padding: var(--space-6);
+  background: white;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-md);
+  animation: ${fadeIn} 0.6s ease-out;
+  
+  h4 {
+    margin: 0 0 var(--space-4) 0;
+    color: var(--gray-800);
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+  
+  .client-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  
+  .client-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border: 1px solid var(--gray-200);
+    
+    &:hover {
+      background: var(--gray-50);
+      border-color: var(--gray-300);
+    }
+    
+    &.selected {
+      background: var(--primary-50);
+      border-color: var(--primary-200);
+      
+      .client-name {
+        color: var(--primary-800);
+        font-weight: 600;
+      }
+    }
+    
+    input[type="radio"] {
+      margin: 0;
+      accent-color: var(--primary-500);
+    }
+    
+    .client-name {
+      font-size: 0.875rem;
+      color: var(--gray-700);
+      transition: all var(--transition-fast);
+    }
+  }
+  
+  .selected-info {
+    margin-top: var(--space-4);
+    padding: var(--space-3);
+    background: var(--primary-50);
+    border-radius: var(--radius-md);
+    font-size: 0.75rem;
+    color: var(--primary-700);
+    font-style: italic;
+  }
+`;
+
+const TabbedDossierContainer = styled.div`
+  width: 100%;
+  max-width: 900px;
+  margin-top: var(--space-8);
+  background: white;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: ${fadeIn} 0.6s ease-out;
+`;
+
+const TabNavigation = styled.div`
+  display: flex;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-200);
+  overflow-x: auto;
+  
+  &::-webkit-scrollbar {
+    height: 4px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: var(--gray-100);
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: var(--gray-300);
+    border-radius: 2px;
+  }
+`;
+
+const TabButton = styled.button`
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  background: transparent;
+  border: none;
+  color: var(--gray-600);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+  
+  &:hover {
+    background: var(--gray-100);
+    color: var(--gray-800);
+  }
+  
+  &.active {
+    background: white;
+    color: var(--primary-600);
+    border-bottom-color: var(--primary-500);
+    font-weight: 600;
+  }
+  
+  svg {
+    flex-shrink: 0;
+  }
+`;
+
+const TabContent = styled.div`
+  padding: 0;
+  
+  /* Override the margin-top from AnalysisReport since it's now inside a tab */
+  & > * {
+    margin-top: 0 !important;
   }
 `;
 
@@ -255,6 +643,8 @@ function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(true);
   const [startDate, setStartDate] = useState(new Date(2023, 0, 1));
   const [endDate, setEndDate] = useState(new Date(2025, 7, 5));
+  const [activeStartDateRange, setActiveStartDateRange] = useState('');
+  const [activeEndDateRange, setActiveEndDateRange] = useState('');
   const [keyword, setKeyword] = useState('');
   const [senderEmail, setSenderEmail] = useState('');
   const [advancedQuery, setAdvancedQuery] = useState('');
@@ -263,17 +653,21 @@ function App() {
   const [warning, setWarning] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedThreads, setSelectedThreads] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedMetadata, setProcessedMetadata] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResults, setAnalysisResults] = useState(null);
   const [keywordError, setKeywordError] = useState(false);
-  const [isGeneratingDossier, setIsGeneratingDossier] = useState(false);
+
   const [dossier, setDossier] = useState(null);
   const [meetingDossier, setMeetingDossier] = useState(null);
-  const [productDossier, setProductDossier] = useState(null);
   const [clientDossier, setClientDossier] = useState(null);
   const [isGeneratingMeeting, setIsGeneratingMeeting] = useState(false);
-  const [isGeneratingProduct, setIsGeneratingProduct] = useState(false);
   const [isGeneratingClient, setIsGeneratingClient] = useState(false);
+  const [clientValidation, setClientValidation] = useState({ valid: false, client_name: '', reason: '' });
+  const [selectedClientName, setSelectedClientName] = useState('');
+  const [availableClientNames, setAvailableClientNames] = useState([]);
+  const [activeDossierTab, setActiveDossierTab] = useState('agenda');
 
   const handleSearch = async () => {
     setIsLoading(true);
@@ -281,12 +675,16 @@ function App() {
     setWarning('');
     setSearchResults([]);
     setSelectedThreads([]);
+    setProcessedMetadata(null);
     setAnalysisResults(null);
     setDossier(null);
     setKeywordError(false);
     setMeetingDossier(null);
-    setProductDossier(null);
+
     setClientDossier(null);
+    setClientValidation({ valid: false, client_name: '', reason: '' });
+    setSelectedClientName('');
+    setAvailableClientNames([]);
 
     // Make keyword compulsory
     if (!keyword.trim()) {
@@ -340,6 +738,154 @@ function App() {
     );
   };
 
+  const handleProcessThreads = async () => {
+    if (selectedThreads.length === 0) return;
+    
+    setIsProcessing(true);
+    setError('');
+    setProcessedMetadata(null);
+    setAnalysisResults(null);
+    
+    try {
+      const response = await axios.post('/api/process_threads_metadata', {
+        thread_ids: selectedThreads
+      });
+      
+      setProcessedMetadata(response.data);
+      
+      // Debug logging
+      console.log('Processed metadata:', response.data);
+      console.log('Available client names:', response.data.available_client_names);
+      
+      const clientNamesFound = response.data.available_client_names && 
+        response.data.available_client_names.length > 0 && 
+        response.data.available_client_names[0] !== 'Unknown Client';
+      
+      if (clientNamesFound) {
+        setWarning(`Processed ${selectedThreads.length} threads. Found client: ${response.data.available_client_names[0]}. Ready for generation.`);
+      } else {
+        setWarning(`Processed ${selectedThreads.length} threads. No external client detected. Analysis may help identify client.`);
+      }
+    } catch (error) {
+      console.error('Error processing threads:', error);
+      setError('An error occurred while processing threads. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGenerateTillDateAgenda = async () => {
+    if (!processedMetadata) return;
+    
+    setIsAnalyzing(true);
+    setError('');
+    setAnalysisResults(null);
+    
+    try {
+      // If we already have analysis results, use them, otherwise generate new analysis
+      let analysisData;
+      if (analysisResults) {
+        analysisData = analysisResults;
+      } else {
+        // Generate analysis from processed metadata
+        const response = await axios.post('/api/analyze_multiple_threads', {
+          thread_ids: processedMetadata.processed_thread_ids
+        });
+        analysisData = response.data;
+        setAnalysisResults(analysisData);
+      }
+      
+      setActiveDossierTab('agenda'); // Auto-switch to agenda tab
+      setWarning('Till Date Agenda generated successfully.');
+    } catch (error) {
+      console.error('Error generating till date agenda:', error);
+      setError('An error occurred while generating till date agenda. Please try again.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleGenerateMeetingFlow = async () => {
+    if (!processedMetadata) return;
+    
+    setIsGeneratingMeeting(true);
+    setError('');
+    
+    try {
+      // If we don't have analysis results, generate them first
+      let analysisData = analysisResults;
+      if (!analysisData) {
+        const analysisResponse = await axios.post('/api/analyze_multiple_threads', {
+          thread_ids: processedMetadata.processed_thread_ids
+        });
+        analysisData = analysisResponse.data;
+        setAnalysisResults(analysisData);
+      }
+      
+      // Generate meeting flow using analysis data
+      const response = await axios.post('/api/generate_meeting_dossier', {
+        analysis: analysisData
+      });
+      
+      setMeetingDossier(response.data || null);
+      setActiveDossierTab('meeting'); // Auto-switch to meeting tab
+      setWarning('Meeting Flow Dossier generated successfully.');
+    } catch (error) {
+      console.error('Error generating meeting flow:', error);
+      setError('An error occurred while generating meeting flow. Please try again.');
+    } finally {
+      setIsGeneratingMeeting(false);
+    }
+  };
+
+  const handleGenerateClientDossierFromMetadata = async () => {
+    if (!processedMetadata) return;
+    
+    // Try multiple sources for client name
+    let clientName = 'Unknown Client';
+    
+    // 1. Check if we have analysis results with structured client name
+    if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+      const analysisClientName = analysisResults.structured_analysis.client_name;
+      if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
+        clientName = analysisClientName;
+      }
+    }
+    
+    // 2. Fallback to metadata available client names
+    if (clientName === 'Unknown Client' && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
+      const metadataClientName = processedMetadata.available_client_names[0];
+      if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
+        clientName = metadataClientName;
+      }
+    }
+    
+    if (clientName === 'Unknown Client') {
+      setError('No client name found in the processed threads. Cannot generate client dossier.');
+      return;
+    }
+    
+    setIsGeneratingClient(true);
+    setError('');
+    
+    try {
+      const response = await axios.post('/api/generate_client_dossier', {
+        client_name: clientName,
+        client_domain: '',
+        client_context: ''
+      });
+      
+      setClientDossier(response.data || null);
+      setActiveDossierTab('client'); // Auto-switch to client tab
+      setWarning(`Client Dossier for ${clientName} generated successfully.`);
+    } catch (error) {
+      console.error('Error generating client dossier:', error);
+      setError('An error occurred while generating client dossier. Please try again.');
+    } finally {
+      setIsGeneratingClient(false);
+    }
+  };
+
   const handleAnalyzeSelected = async () => {
     if (selectedThreads.length === 0) return;
     
@@ -360,6 +906,23 @@ function App() {
       }
       
       setAnalysisResults(response.data);
+      
+      // Handle available client names from domain extraction
+      if (response.data.available_client_names && response.data.available_client_names.length > 0) {
+        setAvailableClientNames(response.data.available_client_names);
+        // Auto-select the first client name if only one is available
+        if (response.data.available_client_names.length === 1) {
+          setSelectedClientName(response.data.available_client_names[0]);
+        } else {
+          setSelectedClientName(''); // Let user choose if multiple
+        }
+      } else {
+        setAvailableClientNames([]);
+        setSelectedClientName('');
+      }
+      
+      // Validate client name for dossier generation
+      await validateClientName(response.data);
     } catch (error) {
       console.error('Error analyzing threads:', error);
       setError('An error occurred during analysis. Please try again.');
@@ -368,59 +931,40 @@ function App() {
     }
   };
 
-  const handleGenerateMeetingDossier = async () => {
-    if (!analysisResults) {
-      setError('Analyze threads first to generate a meeting dossier.');
-      return;
-    }
-    setIsGeneratingMeeting(true);
-    setError('');
+
+  
+
+  
+  const validateClientName = async (analysisData) => {
     try {
-      const response = await axios.post('/api/generate_meeting_dossier', {
+      const response = await axios.post('/api/validate_client_name', {
         analysis: {
-          structured_analysis: analysisResults.structured_analysis,
-          raw_analysis: analysisResults.analysis,
-          product_name: analysisResults.product_name,
-          product_domain: analysisResults.product_domain
+          structured_analysis: analysisData.structured_analysis,
+          analysis: analysisData.analysis
         }
       });
-      setMeetingDossier(response.data || null);
-    } catch (e) {
-      console.error('Error generating meeting dossier:', e);
-      setError('An error occurred while generating the meeting dossier.');
-    } finally {
-      setIsGeneratingMeeting(false);
+      setClientValidation(response.data);
+    } catch (error) {
+      console.error('Error validating client name:', error);
+      setClientValidation({ valid: false, client_name: '', reason: 'Error validating client name' });
     }
   };
-  
-  const handleGenerateProductDossier = async () => {
-    if (!analysisResults || !analysisResults.product_name || analysisResults.product_name.toLowerCase().includes('unknown')) {
-      setError('Product information is required to generate a product dossier.');
+
+  const handleGenerateClientDossier = async () => {
+    // Use selected client name if available, otherwise fall back to validated client name
+    const clientNameToUse = selectedClientName || clientValidation.client_name;
+    
+    if (!clientNameToUse) {
+      setError('Please select a client name from the available options.');
       return;
     }
-    setIsGeneratingProduct(true);
-    setError('');
-    try {
-      const response = await axios.post('/api/generate_product_dossier', {
-        product_name: analysisResults.product_name,
-        product_domain: analysisResults.product_domain || 'general product'
-      });
-      setProductDossier(response.data || null);
-    } catch (e) {
-      console.error('Error generating product dossier:', e);
-      setError('An error occurred while generating the product dossier.');
-    } finally {
-      setIsGeneratingProduct(false);
-    }
-  };
-  
-  const handleGenerateClientDossier = async () => {
+    
     setIsGeneratingClient(true);
     setError('');
     try {
       const response = await axios.post('/api/generate_client_dossier', {
-        client_name: 'Techify Solutions',
-        client_domain: 'Technology Solutions',
+        client_name: clientNameToUse,
+        client_domain: '',
         client_context: ''
       });
       setClientDossier(response.data || null);
@@ -432,185 +976,143 @@ function App() {
     }
   };
   
-  const handleGenerateAllDossiers = async () => {
-    if (!analysisResults) {
-      setError('Analyze threads first to generate dossiers.');
-      return;
-    }
-    
-    // Generate all three dossiers in parallel
-    const promises = [];
-    
-    // Always generate meeting dossier
-    setIsGeneratingMeeting(true);
-    promises.push(
-      axios.post('/api/generate_meeting_dossier', {
-        analysis: {
-          structured_analysis: analysisResults.structured_analysis,
-          raw_analysis: analysisResults.analysis,
-          product_name: analysisResults.product_name,
-          product_domain: analysisResults.product_domain
-        }
-      }).then(response => {
-        setMeetingDossier(response.data || null);
-        setIsGeneratingMeeting(false);
-      }).catch(e => {
-        console.error('Error generating meeting dossier:', e);
-        setIsGeneratingMeeting(false);
-        throw e;
-      })
-    );
-    
-    // Generate product dossier if product info is available
-    if (analysisResults.product_name && !analysisResults.product_name.toLowerCase().includes('unknown')) {
-      setIsGeneratingProduct(true);
-      promises.push(
-        axios.post('/api/generate_product_dossier', {
-          product_name: analysisResults.product_name,
-          product_domain: analysisResults.product_domain || 'general product'
-        }).then(response => {
-          setProductDossier(response.data || null);
-          setIsGeneratingProduct(false);
-        }).catch(e => {
-          console.error('Error generating product dossier:', e);
-          setIsGeneratingProduct(false);
-          throw e;
-        })
-      );
-    }
-    
-    // Always generate client dossier using Perplexity
-    setIsGeneratingClient(true);
-    promises.push(
-      axios.post('/api/generate_client_dossier', {
-        client_name: 'Techify Solutions',
-        client_domain: 'Technology Solutions',
-        client_context: ''
-      }).then(response => {
-        setClientDossier(response.data || null);
-        setIsGeneratingClient(false);
-      }).catch(e => {
-        console.error('Error generating client dossier:', e);
-        setIsGeneratingClient(false);
-        throw e;
-      })
-    );
-    
-    try {
-      await Promise.all(promises);
-    } catch (e) {
-      setError('An error occurred while generating one or more dossiers.');
-    }
-  };
 
-  const toggleMenu = () => {
-    setIsMenuOpen(!isMenuOpen);
-  };
+
+
 
   return (
     <AppContainer>
       <TopBar>
-        <SectionTitle style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 18 }}>
-          <Mail size={18} /> Search Emails
-        </SectionTitle>
-        <FiltersRow>
-          <FormGroup>
-            <Label>Start Date</Label>
-            <StyledDatePicker
-              selected={startDate}
-              onChange={(date) => setStartDate(date)}
-              dateFormat="yyyy/MM/dd"
-              placeholderText="Select start date"
-              maxDate={endDate}
-              showYearDropdown
-              scrollableYearDropdown
-              yearDropdownItemNumber={15}
-              showMonthDropdown
-              scrollableMonthDropdown
-              showMonthYearPicker={false}
-              showFullMonthYearPicker={false}
-            />
-          </FormGroup>
-          <FormGroup>
-            <Label>End Date</Label>
-            <StyledDatePicker
-              selected={endDate}
-              onChange={(date) => setEndDate(date)}
-              dateFormat="yyyy/MM/dd"
-              placeholderText="Select end date"
-              minDate={startDate}
-              showYearDropdown
-              scrollableYearDropdown
-              yearDropdownItemNumber={15}
-              showMonthDropdown
-              scrollableMonthDropdown
-              showMonthYearPicker={false}
-              showFullMonthYearPicker={false}
-            />
-          </FormGroup>
-          <FormGroup>
-            <Label>Keyword <span style={{color: '#ff4444'}}>*</span></Label>
-            <Input
-              type="text"
-              value={keyword}
-              onChange={(e) => { setKeyword(e.target.value); setKeywordError(false); }}
-              placeholder="Keyword (e.g., invoice, roadmap)"
-              style={keywordError ? { borderColor: '#ff4444', background: '#2a1a1a' } : {}}
-              required
-            />
-          </FormGroup>
-          <FormGroup>
-            <Label>Sender Email</Label>
-            <Input
-              type="email"
-              value={senderEmail}
-              onChange={(e) => setSenderEmail(e.target.value)}
-              placeholder="from: someone@company.com"
-            />
-          </FormGroup>
-          <FormGroup>
-            <Label>Advanced Query</Label>
-            <Input
-              type="text"
-              value={advancedQuery}
-              onChange={(e) => setAdvancedQuery(e.target.value)}
-              placeholder='subject:"invoice" has:attachment -in:chats'
-            />
-          </FormGroup>
-        </FiltersRow>
-        <div style={{ marginTop: 12 }}>
-          <SearchButton onClick={handleSearch} disabled={isLoading}>
-            {isLoading ? (
-              <LoadingSpinner />
-            ) : (
-              <Search size={20} />
-            )}
-            Find Relevant Emails
+        <SearchSection>
+          <SectionHeader>
+            <SectionIcon>
+              <Mail size={18} />
+            </SectionIcon>
+            <SectionTitle>Search Emails</SectionTitle>
+          </SectionHeader>
+          
+          <FiltersRow>
+            <FormGroup>
+              <Label>
+                <Calendar size={16} />
+                Start Date
+              </Label>
+              <StyledDatePicker
+                selected={startDate}
+                onChange={(date) => setStartDate(date)}
+                dateFormat="yyyy/MM/dd"
+                placeholderText="Select start date"
+                maxDate={endDate}
+                showYearDropdown
+                scrollableYearDropdown
+                yearDropdownItemNumber={15}
+                showMonthDropdown
+                scrollableMonthDropdown
+                showMonthYearPicker={false}
+                showFullMonthYearPicker={false}
+              />
+            </FormGroup>
+            
+            <FormGroup>
+              <Label>
+                <Calendar size={16} />
+                End Date
+              </Label>
+              <StyledDatePicker
+                selected={endDate}
+                onChange={(date) => setEndDate(date)}
+                dateFormat="yyyy/MM/dd"
+                placeholderText="Select end date"
+                minDate={startDate}
+                showYearDropdown
+                scrollableYearDropdown
+                yearDropdownItemNumber={15}
+                showMonthDropdown
+                scrollableMonthDropdown
+                showMonthYearPicker={false}
+                showFullMonthYearPicker={false}
+              />
+            </FormGroup>
+            
+            <FormGroup>
+              <Label>
+                <Search size={16} />
+                Keyword
+                <RequiredIndicator>*</RequiredIndicator>
+              </Label>
+              <Input
+                type="text"
+                value={keyword}
+                onChange={(e) => { setKeyword(e.target.value); setKeywordError(false); }}
+                placeholder="e.g., invoice, roadmap, meeting"
+                className={keywordError ? 'error' : ''}
+                required
+              />
+            </FormGroup>
+            
+            <FormGroup>
+              <Label>
+                <User size={16} />
+                Sender Email
+              </Label>
+              <Input
+                type="email"
+                value={senderEmail}
+                onChange={(e) => setSenderEmail(e.target.value)}
+                placeholder="someone@company.com"
+              />
+            </FormGroup>
+            
+            <FormGroup>
+              <Label>
+                <Filter size={16} />
+                Advanced Query
+              </Label>
+              <Input
+                type="text"
+                value={advancedQuery}
+                onChange={(e) => setAdvancedQuery(e.target.value)}
+                placeholder='subject:"invoice" has:attachment'
+              />
+            </FormGroup>
+          </FiltersRow>
+          
+          <SearchButton 
+            className={`primary ${isLoading ? 'loading' : ''}`}
+            onClick={handleSearch} 
+            disabled={isLoading}
+          >
+            {!isLoading && <Search size={20} />}
+            {isLoading ? 'Searching...' : 'Find Relevant Emails'}
           </SearchButton>
-        </div>
+        </SearchSection>
       </TopBar>
       
       <MainContent>
-        <Title>
-          <TitleIcon>📧</TitleIcon>
-          Email Thread Analyzer
-        </Title>
-        
-        <Description>
-          Search and analyze your email threads to find relevant conversations and insights.
-          <br />
-          Use the menu on the left to set your search criteria and find relevant emails.
-        </Description>
+        <HeroSection>
+          <Title>
+            <TitleIcon>
+              <Sparkles />
+            </TitleIcon>
+            Email Thread Analyzer
+          </Title>
+          
+          <Description>
+            Transform your email conversations into actionable insights. Search, analyze, and generate comprehensive dossiers from your email threads with AI-powered intelligence.
+          </Description>
+        </HeroSection>
         
         {error && (
           <Alert className="error">
-            {error}
+            <AlertCircle size={18} />
+            <div>{error}</div>
           </Alert>
         )}
         
         {warning && (
           <Alert className="warning">
-            {warning}
+            <AlertCircle size={18} />
+            <div>{warning}</div>
           </Alert>
         )}
 
@@ -619,139 +1121,277 @@ function App() {
             results={searchResults}
             selectedThreads={selectedThreads}
             onThreadToggle={handleThreadToggle}
-            onAnalyzeSelected={handleAnalyzeSelected}
-            isLoading={isAnalyzing}
+            onProcessSelected={handleProcessThreads}
+            isLoading={isProcessing}
           />
         )}
 
+        {/* Tabbed Dossier Display */}
+        {(analysisResults || meetingDossier || clientDossier || dossier) && (
+          <TabbedDossierContainer>
+            <TabNavigation>
         {analysisResults && (
+                <TabButton 
+                  className={activeDossierTab === 'agenda' ? 'active' : ''}
+                  onClick={() => setActiveDossierTab('agenda')}
+                >
+                  <FileText size={16} />
+                  Till Date Agenda
+                </TabButton>
+              )}
+              {meetingDossier && (
+                <TabButton 
+                  className={activeDossierTab === 'meeting' ? 'active' : ''}
+                  onClick={() => setActiveDossierTab('meeting')}
+                >
+                  <Calendar size={16} />
+                  Meeting Flow Dossier
+                </TabButton>
+              )}
+              {clientDossier && (
+                <TabButton 
+                  className={activeDossierTab === 'client' ? 'active' : ''}
+                  onClick={() => setActiveDossierTab('client')}
+                >
+                  <User size={16} />
+                  Client Dossier
+                </TabButton>
+              )}
+              {dossier && (
+                <TabButton 
+                  className={activeDossierTab === 'legacy' ? 'active' : ''}
+                  onClick={() => setActiveDossierTab('legacy')}
+                >
+                  <FileText size={16} />
+                  Legacy Dossier
+                </TabButton>
+              )}
+            </TabNavigation>
+
+            <TabContent>
+              {activeDossierTab === 'agenda' && analysisResults && (
           <AnalysisReport
             structuredAnalysis={analysisResults.structured_analysis}
             rawAnalysis={analysisResults.analysis}
-          />
-        )}
-
-        {analysisResults && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 12, gap: 12 }}>
-            <div style={{ maxWidth: 800, width: '100%', display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-              {/* Meeting Dossier Button */}
-              <SearchButton onClick={handleGenerateMeetingDossier} disabled={isGeneratingMeeting}>
-                {isGeneratingMeeting ? (
-                  <LoadingSpinner />
-                ) : (
-                  <FileText size={18} />
-                )}
-                Generate Meeting Flow
-              </SearchButton>
-              
-                             {/* Product Dossier Button */}
-               <SearchButton 
-                 onClick={handleGenerateProductDossier} 
-                 disabled={
-                   isGeneratingProduct || 
-                   !analysisResults.product_name || 
-                   analysisResults.product_name.toLowerCase().includes('unknown')
-                 }
-                 title={
-                   !analysisResults.product_name || analysisResults.product_name.toLowerCase().includes('unknown')
-                     ? 'Product information is required to generate a product dossier'
-                     : 'Generate product dossier'
-                 }
-               >
-                 {isGeneratingProduct ? (
-                   <LoadingSpinner />
-                 ) : (
-                   <FileText size={18} />
-                 )}
-                 Generate Product Dossier
-               </SearchButton>
-              
-              {/* Client Dossier Button */}
-              <SearchButton 
-                onClick={handleGenerateClientDossier} 
-                disabled={isGeneratingClient}
-              >
-                {isGeneratingClient ? (
-                  <LoadingSpinner />
-                ) : (
-                  <FileText size={18} />
-                )}
-                Generate Client Dossier
-              </SearchButton>
-              
-              {/* Generate All Button */}
-              <SearchButton 
-                onClick={handleGenerateAllDossiers} 
-                disabled={isGeneratingMeeting || isGeneratingProduct || isGeneratingClient}
-                style={{ gridColumn: '1 / -1' }}
-                title="Generate meeting, client, and product dossiers (if product is identified)"
-              >
-                {(isGeneratingMeeting || isGeneratingProduct || isGeneratingClient) ? (
-                  <LoadingSpinner />
-                ) : (
-                  <FileText size={18} />
-                )}
-                Generate All Available Dossiers
-              </SearchButton>
-            </div>
-          </div>
-        )}
-
-        {/* Meeting Dossier Display */}
-        {meetingDossier && (
-          <DossierContainer>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Meeting Flow Dossier</h3>
-            <div dangerouslySetInnerHTML={{ __html: meetingDossier.meeting_flow?.replace(/\n/g, '<br>') || '' }} />
-          </DossierContainer>
-        )}
-
-        {/* Product Dossier Display */}
-        {productDossier && (
-          <DossierContainer>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Product Dossier</h3>
-            <div dangerouslySetInnerHTML={{ __html: productDossier.product_dossier?.replace(/\n/g, '<br>') || '' }} />
-          </DossierContainer>
-        )}
-
-        {/* Client Dossier Display */}
-        {clientDossier && (
-          <DossierContainer>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Client Dossier</h3>
-            <div dangerouslySetInnerHTML={{ __html: clientDossier.client_dossier?.replace(/\n/g, '<br>') || '' }} />
-          </DossierContainer>
-        )}
-
-        {/* Legacy dossier display - you can remove this old section if you no longer need it */}
-        {dossier && (
-          <DossierContainer>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: '#fff' }}>Legacy Email Dossier</h3>
-            <div>
-              <h4 style={{ color: '#fff', marginBottom: 8 }}>Meeting Flow</h4>
-              <div style={{ marginBottom: 16 }}>
-                {dossier.meeting_flow || ''}
-              </div>
-              <h4 style={{ color: '#fff', marginBottom: 8 }}>Client Details</h4>
-              <div>
-                {dossier.client_details || 'Client Details: To be added.'}
-              </div>
-            </div>
-          </DossierContainer>
-        )}
-
-        {selectedThreads.length > 0 && (
-          <ActionsBar>
-            <SearchButton onClick={handleAnalyzeSelected} disabled={isAnalyzing}>
-              {isAnalyzing ? (
-                <LoadingSpinner />
-              ) : (
-                <Mail size={18} />
+                  threadMetadata={analysisResults.thread_metadata || processedMetadata?.combined_metadata}
+                  combinedMetadata={analysisResults.combined_metadata || processedMetadata?.combined_metadata}
+                  productName={
+                    (analysisResults.product_name && analysisResults.product_name !== 'Unknown Product') 
+                      ? analysisResults.product_name 
+                      : (processedMetadata?.product_name !== 'Unknown Product' ? processedMetadata?.product_name : null)
+                  }
+                  productDomain={
+                    (analysisResults.product_domain && analysisResults.product_domain !== 'general product') 
+                      ? analysisResults.product_domain 
+                      : (processedMetadata?.product_domain !== 'general product' ? processedMetadata?.product_domain : null)
+                  }
+                />
               )}
-              Analyze Selected ({selectedThreads.length})
-            </SearchButton>
-            <SearchButton onClick={() => setSelectedThreads([])} disabled={isAnalyzing}>
+
+              {activeDossierTab === 'meeting' && meetingDossier && (
+                <MeetingFlowReport meetingFlowData={meetingDossier} />
+              )}
+
+              {activeDossierTab === 'client' && clientDossier && (
+                <ClientDossierReport clientDossierData={clientDossier} />
+              )}
+
+              {activeDossierTab === 'legacy' && dossier && (
+                <DossierContainer>
+                  <div>
+                    <h4 style={{ color: 'var(--gray-800)', marginBottom: 'var(--space-2)' }}>Meeting Flow</h4>
+                    <div style={{ marginBottom: 'var(--space-4)' }}>
+                      {dossier.meeting_flow || ''}
+                    </div>
+                    <h4 style={{ color: 'var(--gray-800)', marginBottom: 'var(--space-2)' }}>Client Details</h4>
+                    <div>
+                      {dossier.client_details || 'Client Details: To be added.'}
+                    </div>
+                  </div>
+                </DossierContainer>
+              )}
+            </TabContent>
+          </TabbedDossierContainer>
+        )}
+
+        {/* Client Name Selection */}
+        {analysisResults && availableClientNames.length > 1 && (
+          <ClientSelector>
+            <h4>Multiple Client Names Found - Please Select One:</h4>
+            <div className="client-options">
+              {availableClientNames.map((clientName, index) => (
+                <label 
+                  key={index} 
+                  className={`client-option ${selectedClientName === clientName ? 'selected' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name="clientName"
+                    value={clientName}
+                    checked={selectedClientName === clientName}
+                    onChange={(e) => setSelectedClientName(e.target.value)}
+                  />
+                  <span className="client-name">{clientName}</span>
+                </label>
+              ))}
+            </div>
+            {selectedClientName && (
+              <div className="selected-info">
+                Selected: <strong>{selectedClientName}</strong>
+              </div>
+            )}
+          </ClientSelector>
+        )}
+
+
+
+
+        {selectedThreads.length > 0 && !processedMetadata && (
+          <ActionsBar>
+            <Button 
+              className={`primary ${isProcessing ? 'loading' : ''}`}
+              onClick={handleProcessThreads} 
+              disabled={isProcessing}
+            >
+              {!isProcessing && <Sparkles size={18} />}
+              {isProcessing ? 'Processing...' : `Process Threads (${selectedThreads.length})`}
+            </Button>
+            <Button 
+              className="secondary"
+              onClick={() => setSelectedThreads([])} 
+              disabled={isProcessing}
+            >
               Clear Selection
-            </SearchButton>
+            </Button>
           </ActionsBar>
+        )}
+
+        {/* Three Option Buttons - Show after processing */}
+        {processedMetadata && (
+          <ButtonGrid className="full-width">
+            <Button 
+              className={`primary ${isAnalyzing ? 'loading' : ''}`}
+              onClick={handleGenerateTillDateAgenda} 
+              disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+            >
+              {!isAnalyzing && <FileText size={18} />}
+              {isAnalyzing ? 'Generating...' : '1. Till Date Agenda'}
+            </Button>
+            
+            <Button 
+              className={`primary ${isGeneratingMeeting ? 'loading' : ''}`}
+              onClick={handleGenerateMeetingFlow} 
+              disabled={isGeneratingMeeting || isAnalyzing || isGeneratingClient}
+            >
+              {!isGeneratingMeeting && <Calendar size={18} />}
+              {isGeneratingMeeting ? 'Generating...' : '2. Meeting Flow Dossier'}
+            </Button>
+            
+            <Button 
+              className={`primary ${isGeneratingClient ? 'loading' : ''}`}
+              onClick={handleGenerateClientDossierFromMetadata} 
+              disabled={(() => {
+                // Always disabled during operations
+                if (isGeneratingClient || isAnalyzing || isGeneratingMeeting) {
+                  return true;
+                }
+                
+                // Check if we have a valid client name from either source
+                let hasValidClient = false;
+                
+                // Check analysis results first (most reliable)
+                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+                  const analysisClientName = analysisResults.structured_analysis.client_name;
+                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
+                    hasValidClient = true;
+                  }
+                }
+                
+                // Check metadata if no analysis client found
+                if (!hasValidClient && processedMetadata && processedMetadata.available_client_names) {
+                  const metadataClientNames = processedMetadata.available_client_names;
+                  if (metadataClientNames.length > 0 && metadataClientNames[0].toLowerCase() !== 'unknown client') {
+                    hasValidClient = true;
+                  }
+                }
+                
+                return !hasValidClient;
+              })()}
+              title={(() => {
+                // Get available client name for display
+                let availableClientName = null;
+                
+                // First check analysis results (most reliable after analysis is done)
+                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+                  const analysisClientName = analysisResults.structured_analysis.client_name;
+                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
+                    availableClientName = analysisClientName;
+                  }
+                }
+                
+                // Fallback to metadata (available after processing but less reliable)
+                if (!availableClientName && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
+                  const metadataClientName = processedMetadata.available_client_names[0];
+                  if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
+                    availableClientName = metadataClientName;
+                  }
+                }
+                
+                if (availableClientName) {
+                  return `Generate dossier for ${availableClientName}`;
+                } else if (analysisResults) {
+                  return 'No client name found in analysis';
+                } else {
+                  return 'Generate analysis first to identify client';
+                }
+              })()}
+            >
+              {!isGeneratingClient && <User size={18} />}
+              {isGeneratingClient ? 'Generating...' : (() => {
+                // Get available client name for button text
+                let availableClientName = null;
+                
+                // First check analysis results (most reliable after analysis is done)
+                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+                  const analysisClientName = analysisResults.structured_analysis.client_name;
+                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
+                    availableClientName = analysisClientName;
+                  }
+                }
+                
+                // Fallback to metadata (available after processing but less reliable)
+                if (!availableClientName && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
+                  const metadataClientName = processedMetadata.available_client_names[0];
+                  if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
+                    availableClientName = metadataClientName;
+                  }
+                }
+                
+                if (availableClientName) {
+                  return `3. Client Dossier (${availableClientName})`;
+                } else if (analysisResults) {
+                  return '3. Client Dossier (No Client Found)';
+                } else {
+                  return '3. Client Dossier (Generate Analysis First)';
+                }
+              })()}
+            </Button>
+            
+            <Button 
+              className="secondary"
+              onClick={() => {
+                setProcessedMetadata(null);
+                setSelectedThreads([]);
+                setAnalysisResults(null);
+                setMeetingDossier(null);
+                setClientDossier(null);
+                setActiveDossierTab('agenda'); // Reset to default tab
+              }}
+              disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+            >
+              Start Over
+            </Button>
+          </ButtonGrid>
         )}
       </MainContent>
     </AppContainer>

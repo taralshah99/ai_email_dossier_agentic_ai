@@ -1,55 +1,89 @@
 import React, { useState } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
+
+const fadeInUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const ReportContainer = styled.div`
   width: 100%;
-  max-width: 800px;
-  margin-top: 30px;
-  padding: 25px;
-  background-color: #2a2a2a;
-  border-radius: 8px;
-  border: 1px solid #404040;
+  max-width: 900px;
+  margin-top: var(--space-8);
+  padding: var(--space-8);
+  background: white;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-lg);
+  animation: ${fadeInUp} 0.6s ease-out;
 `;
 
 const ReportTitle = styled.h2`
-  font-size: 24px;
-  font-weight: 600;
-  color: #ffffff;
-  margin: 0 0 20px 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin: 0 0 var(--space-6) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  
+  &::before {
+    content: '';
+    width: 4px;
+    height: 24px;
+    background: var(--primary-500);
+    border-radius: 2px;
+  }
 `;
 
 const ReportContent = styled.div`
-  color: #e0e0e0;
+  color: var(--gray-800);
   line-height: 1.6;
   
   h1, h2, h3 {
-    color: #ffffff;
-    margin: 16px 0 8px 0;
-  }
-  
-  h1 { font-size: 20px; }
-  h2 { font-size: 18px; }
-  h3 { font-size: 16px; }
-  
-  strong {
-    color: #ffffff;
+    color: var(--gray-800);
+    margin: var(--space-5) 0 var(--space-3) 0;
     font-weight: 600;
   }
   
-  em { font-style: italic; }
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.125rem; }
+  h3 { font-size: 1rem; }
   
-  ul {
-    margin: 8px 0;
-    padding-left: 20px;
+  strong {
+    color: var(--gray-800);
+    font-weight: 600;
   }
   
-  li { margin-bottom: 4px; }
+  em { 
+    font-style: italic;
+    color: var(--gray-700);
+  }
   
-  p { margin: 8px 0; }
+  ul {
+    margin: var(--space-3) 0;
+    padding-left: var(--space-5);
+  }
+  
+  li { 
+    margin-bottom: var(--space-2);
+    color: var(--gray-700);
+  }
+  
+  p { 
+    margin: var(--space-3) 0;
+    color: var(--gray-700);
+  }
 `;
 
 const Section = styled.div`
-  margin-bottom: 20px;
+  margin-bottom: var(--space-6);
   
   &:last-child {
     margin-bottom: 0;
@@ -57,344 +91,211 @@ const Section = styled.div`
 `;
 
 const SectionTitle = styled.h3`
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
-  color: #ffffff;
-  margin: 0 0 12px 0;
-`;
-
-const GroupCard = styled.div`
-  border: 1px solid #3a3a3a;
-  border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
-  background-color: #232323;
-`;
-
-const GroupHeader = styled.div`
+  color: var(--gray-800);
+  margin: 0 0 var(--space-4) 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-`;
-
-const GroupTitle = styled.h3`
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-`;
-
-const TagsRow = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 8px 0 12px 0;
-`;
-
-const Tag = styled.button`
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid ${props => (props.$active ? '#ff4444' : '#444')};
-  background: ${props => (props.$active ? '#3b1f1f' : '#2a2a2a')};
-  color: #e0e0e0;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease-in-out;
-  &:hover { border-color: #ff6666; }
+  gap: var(--space-2);
   
-  &:disabled {
-    background: #333333;
-    color: #888888;
-    border-color: #555555;
-    cursor: not-allowed;
-    opacity: 0.6;
-    transform: scale(0.95);
+  &::before {
+    content: '';
+    width: 3px;
+    height: 18px;
+    background: var(--primary-400);
+    border-radius: 2px;
   }
 `;
 
-const SubSection = styled.div`
-  border-top: 1px dashed #3a3a3a;
-  padding-top: 10px;
-  margin-top: 10px;
-`;
 
-const ItemBadgeRow = styled.div`
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin: 4px 0 0 0;
-`;
 
-const Badge = styled.span`
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: #ddd;
-  background: #303030;
-  border: 1px solid #3f3f3f;
-  border-radius: 999px;
-`;
-
-function AnalysisReport({ structuredAnalysis, rawAnalysis, productDossier }) {
-  const [selectedByGroup, setSelectedByGroup] = useState({});
-
+function AnalysisReport({ 
+  structuredAnalysis, 
+  rawAnalysis, 
+  threadMetadata, 
+  combinedMetadata, 
+  productName, 
+  productDomain 
+}) {
   const hasStructured = structuredAnalysis && typeof structuredAnalysis === 'object';
-  if (!hasStructured && !rawAnalysis && !productDossier) return null;
+  if (!hasStructured && !rawAnalysis) return null;
 
-  const hasGroups = hasStructured && Array.isArray(structuredAnalysis.groups) && structuredAnalysis.groups.length > 0;
-  const globalSummary = (hasStructured && structuredAnalysis.global_summary) || null;
-  const hasLegacySections = hasStructured && (
-    (Array.isArray(structuredAnalysis.thread_subjects) && structuredAnalysis.thread_subjects.length > 0) ||
-    (Array.isArray(structuredAnalysis.email_summaries) && structuredAnalysis.email_summaries.length > 0) ||
-    (Array.isArray(structuredAnalysis.meeting_agenda) && structuredAnalysis.meeting_agenda.length > 0) ||
-    (Array.isArray(structuredAnalysis.meeting_date_time) && structuredAnalysis.meeting_date_time.length > 0) ||
-    (!!structuredAnalysis.final_conclusion)
-  );
-
-  const findMatchedSubjects = (text, subjects) => {
-    if (!text || !Array.isArray(subjects)) return [];
-    const lower = String(text).toLowerCase();
-    const matches = [];
-    for (const s of subjects) {
-      if (!s) continue;
-      const subj = String(s).toLowerCase();
-      if (subj && lower.includes(subj)) matches.push(s);
+  // Get client name from structured analysis
+  const clientName = structuredAnalysis?.client_name || 'Unknown Client';
+  
+  // Get product information with conditional display logic
+  const getProductDisplay = () => {
+    const hasProductName = productName && 
+                          productName !== 'Unknown Product' && 
+                          productName.toLowerCase() !== 'unknown';
+    const hasProductDomain = productDomain && 
+                            productDomain !== 'general product' &&
+                            productDomain.toLowerCase() !== 'unknown';
+    
+    if (hasProductName && hasProductDomain) {
+      return `${productName} (${productDomain})`;
+    } else if (hasProductName) {
+      return productName;
+    } else if (hasProductDomain) {
+      return productDomain;
     }
-    return matches;
+    return null;
+  };
+  
+  // Get thread summary information
+  const getThreadSummary = () => {
+    // Use combined metadata for multiple threads, thread metadata for single thread
+    const metadata = combinedMetadata || threadMetadata;
+    if (!metadata) return null;
+    
+    // Calculate email count
+    let emailCount = 0;
+    if (combinedMetadata) {
+      // For multiple threads, sum up message_count from all threads
+      if (combinedMetadata.threads && Array.isArray(combinedMetadata.threads)) {
+        emailCount = combinedMetadata.threads.reduce((total, thread) => {
+          return total + (thread.message_count || 0);
+        }, 0);
+      }
+    } else if (threadMetadata) {
+      // For single thread, use message_count directly
+      emailCount = threadMetadata.message_count || 0;
+    }
+    
+    return {
+      firstEmailDate: metadata.first_email_date,
+      lastEmailDate: metadata.last_email_date,
+      emailCount: emailCount,
+      threadCount: metadata.thread_count || 1,
+      participants: metadata.participants || {},
+      totalParticipants: metadata.total_participants || Object.keys(metadata.participants || {}).length
+    };
+  };
+  
+  // Get consolidated email summaries as bullet points
+  const getConsolidatedSummaries = () => {
+    if (!hasStructured) return [];
+    
+    let allSummaries = [];
+    
+    // Check for groups first (newer format)
+    if (Array.isArray(structuredAnalysis.groups) && structuredAnalysis.groups.length > 0) {
+      structuredAnalysis.groups.forEach(group => {
+        if (Array.isArray(group.email_summaries)) {
+          allSummaries.push(...group.email_summaries);
+        }
+      });
+    } else if (Array.isArray(structuredAnalysis.email_summaries)) {
+      // Fallback to legacy format
+      allSummaries = [...structuredAnalysis.email_summaries];
+    }
+    
+    // Replace "Unknown Sender" with actual participant names
+    const threadSummary = getThreadSummary();
+    if (threadSummary && threadSummary.participants) {
+      allSummaries = allSummaries.map(summary => {
+        let updatedSummary = summary;
+        
+        // Look for "Unknown Sender" patterns and try to replace with actual names
+        if (updatedSummary.toLowerCase().includes('unknown sender')) {
+          // Try to find email patterns in the summary and match with participants
+          const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+          const emailsInSummary = updatedSummary.match(emailRegex) || [];
+          
+          emailsInSummary.forEach(email => {
+            const participant = threadSummary.participants[email.toLowerCase()];
+            if (participant && participant.display_name) {
+              // Replace "Unknown Sender" with the actual name when the email is mentioned
+              updatedSummary = updatedSummary.replace(/unknown sender/gi, participant.display_name);
+            }
+          });
+          
+          // If no email found in summary but we have participants, try to replace with first participant
+          if (!emailsInSummary.length && Object.keys(threadSummary.participants).length > 0) {
+            const firstParticipant = Object.values(threadSummary.participants)[0];
+            if (firstParticipant && firstParticipant.display_name) {
+              updatedSummary = updatedSummary.replace(/unknown sender/gi, firstParticipant.display_name);
+            }
+          }
+        }
+        
+        return updatedSummary;
+      });
+    }
+    
+    return allSummaries;
   };
 
-  const toggleSubject = (groupIdx, subject) => {
-    setSelectedByGroup(prev => {
-      const cur = new Set(prev[groupIdx] || []);
-      if (cur.has(subject)) cur.delete(subject); else cur.add(subject);
-      return { ...prev, [groupIdx]: Array.from(cur) };
-    });
-  };
+  const threadSummary = getThreadSummary();
+  const productDisplay = getProductDisplay();
+  const consolidatedSummaries = getConsolidatedSummaries();
 
   return (
     <ReportContainer>
-  <ReportTitle>Analysis Report</ReportTitle>
-  <ReportContent>
-    {hasStructured ? (
-      <>
-        {/* Client section */}
-        {structuredAnalysis.client_name && (
-          <Section>
-            <SectionTitle>Client</SectionTitle>
-            <div>
-              <p><strong>Name:</strong> {structuredAnalysis.client_name}</p>
-            </div>
-          </Section>
-        )}
+      <ReportTitle>Till date Agenda</ReportTitle>
+      <ReportContent>
+        {hasStructured ? (
+          <>
+            {/* Client Name */}
+            <Section>
+              <SectionTitle>Client Name</SectionTitle>
+              <p>{clientName}</p>
+            </Section>
 
-        {/* Product section */}
-        {(structuredAnalysis.product_name || structuredAnalysis.product_domain) && (
-          <Section>
-            <SectionTitle>Product</SectionTitle>
-            <div>
-              {structuredAnalysis.product_name && (
-                <p><strong>Name:</strong> {structuredAnalysis.product_name}</p>
-              )}
-              {structuredAnalysis.product_domain && (
-                <p><strong>Domain:</strong> {structuredAnalysis.product_domain}</p>
-              )}
-            </div>
-          </Section>
-        )}
-
-        {structuredAnalysis.product_dossier && (
-          <Section>
-            <SectionTitle>Product Dossier</SectionTitle>
-            <div dangerouslySetInnerHTML={{ __html: structuredAnalysis.product_dossier }} />
-          </Section>
-        )}
-
-        {structuredAnalysis.product_details && (
-          <Section>
-            <SectionTitle>Product Details</SectionTitle>
-            <div style={{ whiteSpace: 'pre-wrap' }}>
-              {structuredAnalysis.product_details}
-            </div>
-          </Section>
-        )}
-            {hasGroups ? (
-              <>
-                {structuredAnalysis.groups.map((group, gIdx) => {
-                  const subjects = Array.isArray(group.thread_subjects) ? group.thread_subjects : [];
-                  const selected = selectedByGroup[gIdx] || [];
-                  const filterActive = selected.length > 0;
-
-                  const filterItems = (items) => {
-                    if (!Array.isArray(items)) return [];
-                    if (!filterActive) return items;
-                    return items.filter(it => findMatchedSubjects(it, subjects).some(s => selected.includes(s)));
-                  };
-
-                  const renderList = (title, items, keyPrefix) => (
-                    Array.isArray(items) && items.length > 0 && (
-                      <SubSection>
-                        <p><strong>{title}:</strong></p>
-                        <ul>
-                          {items.map((item, idx) => {
-                            const matchBadges = findMatchedSubjects(item, subjects);
-                            return (
-                              <li key={`${keyPrefix}-${gIdx}-${idx}`}>
-                                {item}
-                                {matchBadges.length > 0 && (
-                                  <ItemBadgeRow>
-                                    {matchBadges.map((mb, mbIdx) => (
-                                      <Badge key={`${keyPrefix}-mb-${gIdx}-${idx}-${mbIdx}`}>{mb}</Badge>
-                                    ))}
-                                  </ItemBadgeRow>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </SubSection>
-                    )
-                  );
-
-                  return (
-                    <GroupCard key={`group-${gIdx}`}>
-                      <GroupHeader>
-                        <GroupTitle>{group.title || `Group ${gIdx + 1}`}</GroupTitle>
-                      </GroupHeader>
-
-                      {subjects.length > 0 && (
-                        <>
-                          <p><strong>Threads included:</strong></p>
-                          <TagsRow>
-                            {subjects.map((s, sIdx) => (
-                              <Tag
-                                key={`subject-${gIdx}-${sIdx}`}
-                                $active={selected.includes(s)}
-                                onClick={() => toggleSubject(gIdx, s)}
-                                title={selected.includes(s) ? 'Click to unselect' : 'Click to filter by this thread'}
-                              >
-                                {s}
-                              </Tag>
-                            ))}
-                            {selected.length > 0 && (
-                              <Tag onClick={() => setSelectedByGroup(prev => ({ ...prev, [gIdx]: [] }))}>
-                                Clear filter
-                              </Tag>
-                            )}
-                          </TagsRow>
-                        </>
-                      )}
-
-                      {Array.isArray(group.products) && group.products.length > 0 && (
-                      <div>
-                        <p><strong>Products:</strong></p>
-                        <ul>
-                          {group.products.map((p, pIdx) => (
-                          <li key={`gp-${gIdx}-${pIdx}`}>
-                            {p?.client_name || 'Unknown Client'} — {p?.product_name || 'Unknown Product'}{p?.product_domain ? ` — ${p.product_domain}` : ''}
-                          </li>
-                          ))}
-                        </ul>
-                      </div>
-                      )}
-
-                      {renderList('Email Summaries', filterItems(group.email_summaries), 'ges')}
-                      {renderList('Meeting Agenda', filterItems(group.meeting_agenda), 'gma')}
-                      {renderList('Meeting Date & Time', filterItems(group.meeting_date_time), 'gmdt')}
-
-                      {group.final_conclusion && (
-                        <SubSection>
-                          <p><strong>Conclusion:</strong> {group.final_conclusion}</p>
-                        </SubSection>
-                      )}
-                    </GroupCard>
-                  );
-                })}
-
-                {globalSummary && (
-                  <Section>
-                    <SectionTitle>Global Summary</SectionTitle>
-                    {globalSummary.final_conclusion && (
-                      <p>{globalSummary.final_conclusion}</p>
-                    )}
-                    {Array.isArray(globalSummary.products) && globalSummary.products.length > 0 && (
-                      <div>
-                        <p><strong>Products:</strong></p>
-                        <ul>
-                          {globalSummary.products.map((p, idx) => (
-                          <li key={`gs-p-${idx}`}>
-                            {p?.client_name || 'Unknown Client'} — {p?.product_name || 'Unknown Product'}{p?.product_domain ? ` — ${p.product_domain}` : ''}
-                          </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </Section>
-                )}
-              </>
-            ) : hasLegacySections ? (
-              <>
-                {Array.isArray(structuredAnalysis.thread_subjects) && structuredAnalysis.thread_subjects.length > 0 && (
-                  <Section>
-                    <SectionTitle>Thread Subjects</SectionTitle>
-                    <ul>
-                      {structuredAnalysis.thread_subjects.map((item, idx) => (
-                        <li key={`ts-${idx}`}>{item}</li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-
-                {Array.isArray(structuredAnalysis.email_summaries) && structuredAnalysis.email_summaries.length > 0 && (
-                  <Section>
-                    <SectionTitle>Email Summaries</SectionTitle>
-                    <ul>
-                      {structuredAnalysis.email_summaries.map((item, idx) => (
-                        <li key={`es-${idx}`}>{item}</li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-
-                {Array.isArray(structuredAnalysis.meeting_agenda) && structuredAnalysis.meeting_agenda.length > 0 && (
-                  <Section>
-                    <SectionTitle>Meeting Agenda</SectionTitle>
-                    <ul>
-                      {structuredAnalysis.meeting_agenda.map((item, idx) => (
-                        <li key={`ma-${idx}`}>{item}</li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-
-                {Array.isArray(structuredAnalysis.meeting_date_time) && structuredAnalysis.meeting_date_time.length > 0 && (
-                  <Section>
-                    <SectionTitle>Meeting Date & Time</SectionTitle>
-                    <ul>
-                      {structuredAnalysis.meeting_date_time.map((item, idx) => (
-                        <li key={`mdt-${idx}`}>{item}</li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-
-                {structuredAnalysis.final_conclusion && (
-                  <Section>
-                    <SectionTitle>Final Conclusion</SectionTitle>
-                    <div>
-                      <p>{structuredAnalysis.final_conclusion}</p>
-                    </div>
-                  </Section>
-                )}
-              </>
-            ) : null}
-
-            {productDossier && (
+            {/* Product Name and Domain */}
+            {productDisplay && (
               <Section>
-                <SectionTitle>Product Dossier</SectionTitle>
-                <div dangerouslySetInnerHTML={{ __html: productDossier }} />
+                <SectionTitle>Product Name and Domain</SectionTitle>
+                <p>{productDisplay}</p>
               </Section>
             )}
+
+            {/* Participants */}
+            <Section>
+              <SectionTitle>Participants</SectionTitle>
+              {threadSummary && Object.keys(threadSummary.participants).length > 0 ? (
+                <ul>
+                  {Object.entries(threadSummary.participants).map(([email, participant]) => (
+                    <li key={email}>
+                      {participant.display_name || email} - {email}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p><em>No participant information available.</em></p>
+              )}
+            </Section>
+
+            {/* Timeline Information */}
+            <Section>
+              <SectionTitle>Timeline Information</SectionTitle>
+              {threadSummary ? (
+                <div>
+                  <p><strong>First Email:</strong> {threadSummary.firstEmailDate || 'Not available'}</p>
+                  <p><strong>Last Email:</strong> {threadSummary.lastEmailDate || 'Not available'}</p>
+                  <p><strong>Email Count:</strong> {threadSummary.emailCount}</p>
+                  <p><strong>Thread Count:</strong> {threadSummary.threadCount}</p>
+                  <p><strong>Total Participants:</strong> {threadSummary.totalParticipants}</p>
+                </div>
+              ) : (
+                <p><em>Timeline information not available.</em></p>
+              )}
+            </Section>
+
+            {/* Mail Thread Summary */}
+            <Section>
+              <SectionTitle>Mail Thread Summary</SectionTitle>
+              {consolidatedSummaries.length > 0 ? (
+                <ul>
+                  {consolidatedSummaries.map((summary, idx) => (
+                    <li key={`summary-${idx}`}>{summary}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p><em>Thread summary information not available.</em></p>
+              )}
+            </Section>
           </>
         ) : (
           <div dangerouslySetInnerHTML={{ __html: rawAnalysis }} />
