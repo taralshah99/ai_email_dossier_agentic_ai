@@ -29,10 +29,16 @@ class MeetingAgents:
             goal=(
                 "Analyze an email thread and produce a structured report with the exact sections: "
                 "Email Summaries, Meeting Agenda, Meeting Date & Time, Final Conclusion, Client Name, Product Name, Product Domain. "
-                "When determining Client Name, first check explicit mentions in the email bodies or signatures. "
+                "When determining Client Name, extract ONLY the company name without any additional context, explanations, or parenthetical remarks. "
+                "First check explicit mentions in the email bodies or signatures. "
                 "If not clearly stated, infer the Client Name from the sender/recipient email addresses and CC fields "
                 "(look for company names in domains like '@company.com' and convert them to proper names). "
+                "For domain extraction examples: 'jrasoully@thehalalshack.com' should become 'The Halal Shack', "
+                "'user@techifysolutions.com' should become 'Techify Solutions', '@abc-corp.com' should become 'ABC Corp'. "
+                "Pay special attention to compound words and common prefixes like 'the'. "
                 "If multiple possible client names appear, choose the one most relevant to the meeting context. "
+                "CRITICAL: Output ONLY the company name (e.g., 'The Halal Shack', 'ABC Corp', 'Microsoft'). "
+                "Do NOT add explanations like '(likely X organization)' or '(domain not stated)' or any other context. "
                 "Only output 'Unknown Client' if there is truly no clear company name in either the text or email addresses. "
                 "Summarize every email (chronological), extract actionable agenda items and owners, and capture all explicit or implied dates/times. "
                 "Write a detailed Final Conclusion (3—6 sentences) covering outcomes, decisions, owners, and next steps. "
@@ -56,53 +62,22 @@ class MeetingAgents:
         return Agent(
             role="Meeting Flow Writer",
             goal=(
-                "Generate a comprehensive meeting flow document with exact markdown headings. "
+                "Generate a comprehensive meeting flow document in plain text format with clear headings. "
                 "Focus on meeting objectives, context, discussion points, decisions, blockers, and next steps. "
-                "Use the analysis as primary source; use PRODUCT CONTEXT only to frame discussions, not invent facts."
+                "Use the analysis as primary source; use PRODUCT CONTEXT only to frame discussions, not invent facts. "
+                "Format output as clean, professional text without markdown symbols."
             ),
             backstory=(
                 "You excel at turning fragmented notes and summaries into a coherent, chronological meeting narrative. "
-                "You avoid speculation and write in clear, professional prose. You focus solely on meeting flow documentation."
+                "You avoid speculation and write in clear, professional prose. You focus solely on meeting flow documentation. "
+                "You format output as clean, readable text without markdown formatting."
             ),
             llm=self.azure_llm,
             verbose=True,
             allow_delegation=False,
         )
 
-    def product_dossier_creator(self, product_name: str, product_domain: str = ""):
-        """
-        Agent focused ONLY on product dossier creation using local/internal product knowledge.
-        This agent creates comprehensive product documentation from .md files.
-        """
-        return Agent(
-            role="Product Research Analyst",
-            goal=(
-                f"Create a clear, professional product dossier for '{product_name}' ({product_domain}). "
-                "Use ONLY the PRODUCT KNOWLEDGE included in the prompt (do not browse or invent facts). "
-                "Return markdown ONLY, with the exact sections in this order:\n\n"
-                "1) # Product Dossier: <Product Name>\n"
-                "2) ## Executive Summary (2-4 sentences)\n"
-                "3) ## Overview (short description)\n"
-                "4) ## Core Features (bulleted list)\n"
-                "5) ## Key Benefits (bulleted list)\n"
-                "6) ## Target Users & Use Cases (bulleted list)\n"
-                "7) ## Integrations & Compatibility\n"
-                "8) ## Security & Compliance\n"
-                "9) ## Pricing & Packaging (if present in PRODUCT KNOWLEDGE)\n"
-                "10) ## Competitive Positioning & Differentiators\n"
-                "11) ## Sales / Implementation Talking Points (bulleted)\n\n"
-                "If some sections are not present in the PRODUCT KNOWLEDGE, write 'Not available in internal docs.' for those sections. "
-                "Do NOT include placeholders for client info or speculative claims. Keep tone factual and concise."
-            ),
-            backstory=(
-                "You are a seasoned product researcher who specializes in converting internal product documentation "
-                "into crisp, comprehensive product dossiers. You focus exclusively on product features, benefits, "
-                "and technical specifications without mixing in client or meeting details."
-            ),
-            llm=self.azure_llm,
-            verbose=True,
-            allow_delegation=False,
-        )
+
 
     def client_dossier_creator(self, client_name: str = "", client_domain: str = ""):
         """

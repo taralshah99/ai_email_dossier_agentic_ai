@@ -50,10 +50,30 @@ def list_email_threads(service, query: str = "", max_results: int = 100, include
     return threads
 
 def get_email_thread(service, thread_id):
-    """Gets the full content of a thread."""
-    thread = service.users().threads().get(userId="me", id=thread_id, format='full').execute()
-    messages = thread.get("messages", [])
-    return messages
+    """Gets the full content of a thread with all headers."""
+    try:
+        # Get the full thread with all message data
+        thread = service.users().threads().get(userId="me", id=thread_id, format='full').execute()
+        messages = thread.get("messages", [])
+        
+        # For each message, ensure we have all headers by making an additional call if needed
+        enhanced_messages = []
+        for message in messages:
+            message_id = message.get("id")
+            if message_id:
+                # Get individual message with full headers
+                full_message = service.users().messages().get(userId="me", id=message_id, format='full').execute()
+                enhanced_messages.append(full_message)
+            else:
+                enhanced_messages.append(message)
+        
+        return enhanced_messages
+    except Exception as e:
+        print(f"Error fetching thread {thread_id}: {e}")
+        # Fallback to original method
+        thread = service.users().threads().get(userId="me", id=thread_id, format='full').execute()
+        messages = thread.get("messages", [])
+        return messages
 
 def get_thread_subject_and_sender(service, thread_id):
     """Gets the subject and sender from the first message of a thread."""
@@ -70,5 +90,14 @@ def get_thread_subject_and_sender(service, thread_id):
     except Exception as e:
         print(f"Error fetching metadata for thread {thread_id}: {e}")
         return None, None
+
+def get_gmail_user_profile(service):
+    """Gets the Gmail user's profile information including email address."""
+    try:
+        profile = service.users().getProfile(userId="me").execute()
+        return profile
+    except Exception as e:
+        print(f"Error fetching Gmail user profile: {e}")
+        return None
 
 
