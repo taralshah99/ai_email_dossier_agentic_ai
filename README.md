@@ -1,6 +1,6 @@
 # Email Dossier Creator - React Frontend
 
-A React.js frontend for the Email Thread Analyzer and Product Dossier Creator application, designed to match the functionality of the original Streamlit interface.
+A React.js frontend for the Email Thread Analyzer and Client Dossier Creator application, designed to match the functionality of the original Streamlit interface.
 
 ## Features
 
@@ -9,7 +9,7 @@ A React.js frontend for the Email Thread Analyzer and Product Dossier Creator ap
 - **Search Parameters**: Date range, keyword, sender email, and general query filters
 - **Thread Selection**: Multi-select checkboxes for email threads
 - **Analysis Results**: Structured email analysis with formatted output
-- **Product Dossier**: Generate detailed product dossiers
+- **Client Dossier**: Generate detailed client dossiers
 - **Error Handling**: User-friendly error and warning messages
 - **Responsive Design**: Works on desktop and mobile devices
 
@@ -17,7 +17,7 @@ A React.js frontend for the Email Thread Analyzer and Product Dossier Creator ap
 
 1. **Step 1**: Find relevant emails based on date range and optional filters
 2. **Step 2**: Select one or more threads to analyze their content
-3. **Step 3**: Generate a detailed product dossier if needed
+3. **Step 3**: Generate a detailed client dossier if needed
 
 ## Setup
 
@@ -95,7 +95,7 @@ The frontend communicates with the Flask backend through these endpoints:
 - `POST /api/find_threads` - Search for email threads
 - `POST /api/analyze_thread` - Analyze single thread
 - `POST /api/analyze_multiple_threads` - Analyze multiple threads
-- `POST /api/generate_dossier` - Generate product dossier
+- `POST /api/generate_dossier` - Generate meeting and client dossiers
 - `GET /api/health` - Health check
 
 ## Features Comparison with Streamlit
@@ -107,7 +107,7 @@ The frontend communicates with the Flask backend through these endpoints:
 | Optional search filters | ✅ | ✅ |
 | Thread selection | ✅ | ✅ |
 | Analysis results | ✅ | ✅ |
-| Product dossier generation | ✅ | ✅ |
+| Client dossier generation | ✅ | ✅ |
 | Error handling | ✅ | ✅ |
 | Responsive design | ❌ | ✅ |
 | Dark theme | ❌ | ✅ |
