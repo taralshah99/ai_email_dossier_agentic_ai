@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { Search, Mail, FileText, Calendar, User, Filter, Sparkles, AlertCircle } from 'lucide-react';
 import axios from 'axios';
@@ -9,6 +9,10 @@ import SearchResults from './components/SearchResults';
 import AnalysisReport from './components/AnalysisReport';
 import MeetingFlowReport from './components/MeetingFlowReport';
 import ClientDossierReport from './components/ClientDossierReport';
+import LoginScreen from './components/LoginScreen';
+import UserProfile from './components/UserProfile';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { setupAxiosDefaults, getErrorMessage, isAuthError } from './utils/authUtils';
 
 // Animations
 const fadeIn = keyframes`
@@ -79,6 +83,38 @@ const TopBar = styled.div`
   @media (max-width: 768px) {
     padding: var(--space-4) var(--space-5);
   }
+`;
+
+const TopBarHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-6);
+  
+  @media (max-width: 768px) {
+    margin-bottom: var(--space-4);
+  }
+`;
+
+const TopBarTitle = styled.h2`
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+`;
+
+const TopBarIcon = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--primary-500);
+  border-radius: var(--radius-lg);
+  color: white;
 `;
 
 const SearchSection = styled.div`
@@ -639,7 +675,11 @@ const TabContent = styled.div`
   }
 `;
 
-function App() {
+// Setup axios defaults on module load
+setupAxiosDefaults();
+
+function AuthenticatedApp() {
+  const { user, logout, isLoggingOut } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(true);
   const [startDate, setStartDate] = useState(new Date(2023, 0, 1));
   const [endDate, setEndDate] = useState(new Date(2025, 7, 5));
@@ -724,7 +764,11 @@ function App() {
       }
     } catch (error) {
       console.error('Error searching emails:', error);
-      setError('An error occurred while finding emails. Please try again.');
+      if (isAuthError(error)) {
+        setError('Authentication expired. Please refresh the page to log in again.');
+      } else {
+        setError(getErrorMessage(error));
+      }
     } finally {
       setIsLoading(false);
     }
@@ -983,13 +1027,21 @@ function App() {
   return (
     <AppContainer>
       <TopBar>
-        <SearchSection>
-          <SectionHeader>
-            <SectionIcon>
+        <TopBarHeader>
+          <TopBarTitle>
+            <TopBarIcon>
               <Mail size={18} />
-            </SectionIcon>
-            <SectionTitle>Search Emails</SectionTitle>
-          </SectionHeader>
+            </TopBarIcon>
+            Search Emails
+          </TopBarTitle>
+          <UserProfile 
+            user={user} 
+            onLogout={logout} 
+            isLoggingOut={isLoggingOut}
+          />
+        </TopBarHeader>
+        
+        <SearchSection>
           
           <FiltersRow>
             <FormGroup>
@@ -1406,6 +1458,44 @@ function App() {
       </MainContent>
     </AppContainer>
   );
+}
+
+// Main App component with authentication routing
+function App() {
+  return (
+    <AuthProvider>
+      <AppRouter />
+    </AuthProvider>
+  );
+}
+
+// Router component to handle authentication flow
+function AppRouter() {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  // Show loading spinner while checking authentication
+  if (isLoading) {
+    return (
+      <AppContainer>
+        <MainContent>
+          <HeroSection>
+            <TitleIcon>
+              <Sparkles />
+            </TitleIcon>
+            <Description>Loading...</Description>
+          </HeroSection>
+        </MainContent>
+      </AppContainer>
+    );
+  }
+
+  // Show login screen if not authenticated
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
+
+  // Show main app if authenticated
+  return <AuthenticatedApp />;
 }
 
 export default App;

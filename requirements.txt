@@ -9,3 +9,4 @@ flask
 flask-cors
 langchain
 requests
+Flask-Session

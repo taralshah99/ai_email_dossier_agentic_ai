@@ -4,14 +4,23 @@ import base64
 import re
 import json
 from typing import List, Tuple
-from flask import Flask, request, jsonify
+from datetime import timedelta
+from flask import Flask, request, jsonify, session, redirect, url_for
 from flask_cors import CORS
+from flask_session import Session
 from dotenv import load_dotenv
 
 from crewai import Crew, Process, Task, LLM
 from crewai_agents import MeetingAgents
 from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
 import requests
+
+# Import our authentication modules
+from auth import (
+    initiate_oauth_flow, handle_oauth_callback, is_authenticated, 
+    get_current_user, logout, require_auth, get_gmail_service as get_auth_gmail_service
+)
+from session_manager import setup_session_cleanup, validate_session, create_session, get_session_info
 
 # --- Load .env variables ---
 load_dotenv()
@@ -471,21 +480,38 @@ gmail_service = None
 gmail_service_error = None
 
 def ensure_gmail_service():
-    global gmail_service, gmail_service_error
-    if gmail_service is None and gmail_service_error is None:
-        try:
-            gmail_service = get_gmail_service()
-        except Exception as e:
-            gmail_service_error = str(e)
-    if gmail_service is None:
+    """Get authenticated Gmail service using session-based credentials."""
+    try:
+        # Use our new authentication system
+        return get_auth_gmail_service()
+    except Exception as e:
         raise RuntimeError(
-            f"Gmail service is not configured: {gmail_service_error or 'Unknown error. Ensure credentials.json exists and OAuth consent is completed.'}"
+            f"Gmail service is not available: {str(e)}. Please ensure you are logged in."
         )
-    return gmail_service
 
 # --- Flask app setup ---
 app = Flask(__name__)
-CORS(app)
+
+# Flask-Session configuration
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+app.config['SESSION_FILE_DIR'] = 'flask_session'
+app.config['SESSION_FILE_THRESHOLD'] = 500
+app.config['SESSION_FILE_MODE'] = 0o600
+
+# Initialize Flask-Session
+Session(app)
+
+# Setup session cleanup on server shutdown
+setup_session_cleanup()
+
+# Configure CORS
+CORS(app, supports_credentials=True, origins=[
+    os.getenv('FRONTEND_URL', 'http://localhost:3000'),
+    'http://localhost:3000'
+])
 
 # --- Helper: Ask Azure ---
 def ask_azure_openai(prompt: str):
@@ -2026,8 +2052,93 @@ def generate_complete_email_dossier(analysis_payload: dict, include_client: bool
     
     return result
     
+# --- Authentication Routes ---
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    """Initiate Google OAuth login flow."""
+    try:
+        # Clear any existing session data
+        session.clear()
+        
+        # Generate authorization URL
+        auth_url = initiate_oauth_flow()
+        
+        return jsonify({
+            'auth_url': auth_url,
+            'message': 'Redirect to this URL to begin authentication'
+        })
+    except Exception as e:
+        print(f"Error in login: {e}")
+        return jsonify({'error': f'Failed to initiate login: {str(e)}'}), 500
+
+@app.route("/api/auth/callback")
+def api_auth_callback():
+    """Handle OAuth callback from Google."""
+    try:
+        # Get the full callback URL
+        authorization_response_url = request.url
+        
+        # Handle the OAuth callback
+        success = handle_oauth_callback(authorization_response_url)
+        
+        if success:
+            # Redirect to frontend with success
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+            return redirect(f"{frontend_url}?auth=success")
+        else:
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+            return redirect(f"{frontend_url}?auth=error")
+            
+    except Exception as e:
+        print(f"Error in OAuth callback: {e}")
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        return redirect(f"{frontend_url}?auth=error&message={str(e)}")
+
+@app.route("/api/auth/status", methods=["GET"])
+def api_auth_status():
+    """Check current authentication status."""
+    try:
+        if is_authenticated() and validate_session():
+            user_profile = get_current_user()
+            session_info = get_session_info()
+            return jsonify({
+                'authenticated': True,
+                'user': user_profile,
+                'session': session_info
+            })
+        else:
+            return jsonify({'authenticated': False})
+    except Exception as e:
+        print(f"Error checking auth status: {e}")
+        return jsonify({'authenticated': False, 'error': str(e)})
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    """Logout user and clear session."""
+    try:
+        success = logout()
+        return jsonify({
+            'success': success,
+            'message': 'Logged out successfully' if success else 'Logout completed with warnings'
+        })
+    except Exception as e:
+        print(f"Error in logout: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route("/api/auth/profile", methods=["GET"])
+@require_auth
+def api_auth_profile():
+    """Get current user profile (protected route)."""
+    try:
+        user_profile = get_current_user()
+        return jsonify(user_profile)
+    except Exception as e:
+        print(f"Error getting profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # --- API Routes ---
 @app.route("/api/find_threads", methods=["POST"])
+@require_auth
 def api_find_threads():
     try:
         print("Received find_threads request")  # Debug
@@ -2052,6 +2163,7 @@ def api_find_threads():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/analyze_thread", methods=["POST"])
+@require_auth
 def api_analyze_thread():
     try:
         print(f"[analyze_thread] Request received at {request.url}")
@@ -2086,6 +2198,7 @@ def api_analyze_thread():
 
 
 @app.route("/api/process_threads_metadata", methods=["POST"])
+@require_auth
 def api_process_threads_metadata():
     """Extract metadata from threads without AI analysis"""
     try:
@@ -2107,6 +2220,7 @@ def api_process_threads_metadata():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/analyze_multiple_threads", methods=["POST"])
+@require_auth
 def api_analyze_multiple_threads():
     try:
         data = request.get_json()
@@ -2123,6 +2237,7 @@ def api_analyze_multiple_threads():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/generate_meeting_dossier", methods=["POST"])
+@require_auth
 def api_generate_meeting_dossier():
     """Generate only the meeting flow dossier from analysis"""
     try:
@@ -2141,6 +2256,7 @@ def api_generate_meeting_dossier():
 
 
 @app.route("/api/generate_client_dossier", methods=["POST"])
+@require_auth
 def api_generate_client_dossier():
     """Generate only the client dossier"""
     try:
