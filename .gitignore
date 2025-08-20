@@ -2,6 +2,7 @@
 node_modules
 credentials.json
 token.json
+web_credentials.json
 token*
 *.pyi
 
