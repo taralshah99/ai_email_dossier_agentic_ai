@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { Mail, Sparkles, Shield, Zap } from 'lucide-react';
 import axios from 'axios';
-import ConsentScreen from './ConsentScreen';
 
 // Animations
 const fadeIn = keyframes`
@@ -198,7 +197,6 @@ const ErrorMessage = styled.div`
 const LoginScreen = ({ onLoginSuccess }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showConsent, setShowConsent] = useState(false);
 
   const handleLogin = async () => {
     setIsLoading(true);
@@ -225,27 +223,6 @@ const LoginScreen = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleConsentAccept = () => {
-    setShowConsent(false);
-    handleLogin();
-  };
-
-  const handleConsentDecline = () => {
-    setShowConsent(false);
-    setError('');
-  };
-
-  if (showConsent) {
-    return (
-      <LoginContainer>
-        <ConsentScreen 
-          onAccept={handleConsentAccept}
-          onDecline={handleConsentDecline}
-        />
-      </LoginContainer>
-    );
-  }
-
   return (
     <LoginContainer>
       <LoginCard>
@@ -259,10 +236,10 @@ const LoginScreen = ({ onLoginSuccess }) => {
         </Subtitle>
 
         <LoginButton 
-          onClick={() => setShowConsent(true)} 
+          onClick={handleLogin} 
           disabled={isLoading}
           className={isLoading ? 'loading' : ''}
-          title="Review permissions and sign in with your Google account"
+          title="Sign in with your Google account to access your Gmail"
         >
           {!isLoading && <Mail size={20} />}
           {isLoading ? 'Connecting...' : 'Continue with Gmail'}
