@@ -28,16 +28,22 @@ export const AuthProvider = ({ children }) => {
 
   const checkAuthStatus = async () => {
     try {
+      console.log('Checking auth status...');
       const response = await axios.get('/api/auth/status');
+      console.log('Auth status response:', response.data);
+      
       if (response.data.authenticated) {
+        console.log('User is authenticated:', response.data.user);
         setIsAuthenticated(true);
         setUser(response.data.user);
       } else {
+        console.log('User is not authenticated');
         setIsAuthenticated(false);
         setUser(null);
       }
     } catch (error) {
       console.error('Error checking auth status:', error);
+      console.error('Auth status error details:', error.response);
       setIsAuthenticated(false);
       setUser(null);
     } finally {
@@ -50,7 +56,11 @@ export const AuthProvider = ({ children }) => {
     const urlParams = new URLSearchParams(window.location.search);
     const authStatus = urlParams.get('auth');
     
+    console.log('Checking OAuth callback, URL params:', window.location.search);
+    console.log('Auth status from URL:', authStatus);
+    
     if (authStatus === 'success') {
+      console.log('OAuth success detected, clearing URL and checking auth...');
       // Clear URL parameters
       window.history.replaceState({}, document.title, window.location.pathname);
       // Refresh auth status
@@ -61,6 +71,8 @@ export const AuthProvider = ({ children }) => {
       // Clear URL parameters
       window.history.replaceState({}, document.title, window.location.pathname);
       setIsLoading(false);
+    } else if (authStatus) {
+      console.log('Unknown auth status:', authStatus);
     }
   };
 

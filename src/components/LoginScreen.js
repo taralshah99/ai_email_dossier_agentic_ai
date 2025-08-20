@@ -203,14 +203,18 @@ const LoginScreen = ({ onLoginSuccess }) => {
     setError('');
 
     try {
+      console.log('Initiating login...');
       // Request login URL from backend
       const response = await axios.post('/api/auth/login');
+      console.log('Login response:', response.data);
       const { auth_url } = response.data;
 
+      console.log('Redirecting to:', auth_url);
       // Redirect to Google OAuth
       window.location.href = auth_url;
     } catch (err) {
       console.error('Login error:', err);
+      console.error('Error details:', err.response);
       setError(
         err.response?.data?.error || 
         'Failed to initiate login. Please try again.'

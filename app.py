@@ -507,11 +507,12 @@ Session(app)
 # Setup session cleanup on server shutdown
 setup_session_cleanup()
 
-# Configure CORS
-CORS(app, supports_credentials=True, origins=[
-    os.getenv('FRONTEND_URL', 'http://localhost:3000'),
-    'http://localhost:3000'
-])
+# Configure CORS with proper settings
+CORS(app, 
+     supports_credentials=True, 
+     origins=['http://localhost:3000', 'http://127.0.0.1:3000'],
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
 # --- Helper: Ask Azure ---
 def ask_azure_openai(prompt: str):
