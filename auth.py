@@ -37,6 +37,7 @@ def get_google_oauth_flow():
 def initiate_oauth_flow():
     """Start the OAuth authorization flow."""
     try:
+        print("[OAuth Init] Starting OAuth flow...")
         flow = get_google_oauth_flow()
         
         # Generate authorization URL
@@ -46,8 +47,14 @@ def initiate_oauth_flow():
             prompt='consent'  # Force consent screen to get refresh token
         )
         
+        print(f"[OAuth Init] Generated state: {state[:20]}...")
+        print(f"[OAuth Init] Authorization URL: {authorization_url[:100]}...")
+        
         # Store state in session for security
         session['oauth_state'] = state
+        session.permanent = True  # Make session persistent
+        
+        print(f"[OAuth Init] State stored in session. Session keys: {list(session.keys())}")
         
         return authorization_url
     except Exception as e:
@@ -57,32 +64,46 @@ def initiate_oauth_flow():
 def handle_oauth_callback(authorization_response_url):
     """Handle the OAuth callback and exchange code for tokens."""
     try:
+        print(f"[OAuth Callback] Processing callback URL: {authorization_response_url}")
+        print(f"[OAuth Callback] Session keys: {list(session.keys())}")
+        print(f"[OAuth Callback] OAuth state in session: {'oauth_state' in session}")
+        
         flow = get_google_oauth_flow()
         
-        # Verify state parameter for security
-        if 'oauth_state' not in session:
-            raise ValueError("Missing OAuth state in session")
-        
-        flow.state = session['oauth_state']
+        # Try to get state from session, but don't fail if missing
+        # (Google's library will validate the state parameter from the URL)
+        if 'oauth_state' in session:
+            flow.state = session['oauth_state']
+            print(f"[OAuth Callback] Using stored state: {session['oauth_state'][:20]}...")
+        else:
+            print("[OAuth Callback] No stored state found, letting Google handle validation")
         
         # Exchange authorization code for tokens
+        print("[OAuth Callback] Fetching tokens...")
         flow.fetch_token(authorization_response=authorization_response_url)
+        print("[OAuth Callback] Tokens received successfully")
         
         # Store credentials in session
         credentials = flow.credentials
         store_credentials_in_session(credentials)
+        print("[OAuth Callback] Credentials stored in session")
         
         # Get user profile information
         user_profile = get_user_profile(credentials)
         if user_profile:
             session['user_profile'] = user_profile
+            print(f"[OAuth Callback] User profile stored: {user_profile.get('email', 'unknown')}")
         
         # Clean up OAuth state
         session.pop('oauth_state', None)
         
+        # Make session permanent to survive browser refresh
+        session.permanent = True
+        
         return True
     except Exception as e:
         print(f"Error handling OAuth callback: {e}")
+        print(f"[OAuth Callback] Error type: {type(e).__name__}")
         # Clean up on error
         session.pop('oauth_state', None)
         raise

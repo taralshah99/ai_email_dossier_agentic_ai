@@ -498,11 +498,13 @@ app = Flask(__name__)
 # Flask-Session configuration
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_PERMANENT'] = True
+app.config['SESSION_PERMANENT'] = False  # Let us control permanence manually
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 app.config['SESSION_FILE_DIR'] = 'flask_session'
 app.config['SESSION_FILE_THRESHOLD'] = 500
 app.config['SESSION_FILE_MODE'] = 0o600
+app.config['SESSION_USE_SIGNER'] = True  # Sign session cookies
+app.config['SESSION_KEY_PREFIX'] = 'email-dossier:'  # Unique prefix
 
 # Initialize Flask-Session
 Session(app)
@@ -2079,22 +2081,35 @@ def api_auth_login():
 def api_auth_callback():
     """Handle OAuth callback from Google."""
     try:
+        print(f"[Callback Route] Received callback request")
+        print(f"[Callback Route] Request URL: {request.url}")
+        print(f"[Callback Route] Request args: {dict(request.args)}")
+        print(f"[Callback Route] Session ID: {session.get('_id', 'No session ID')}")
+        print(f"[Callback Route] Session keys before callback: {list(session.keys())}")
+        
         # Get the full callback URL
         authorization_response_url = request.url
         
         # Handle the OAuth callback
         success = handle_oauth_callback(authorization_response_url)
         
+        print(f"[Callback Route] OAuth callback success: {success}")
+        print(f"[Callback Route] Session keys after callback: {list(session.keys())}")
+        
         if success:
             # Redirect to frontend with success
             frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
-            return redirect(f"{frontend_url}?auth=success")
+            redirect_url = f"{frontend_url}?auth=success"
+            print(f"[Callback Route] Redirecting to: {redirect_url}")
+            return redirect(redirect_url)
         else:
             frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
             return redirect(f"{frontend_url}?auth=error")
             
     except Exception as e:
         print(f"Error in OAuth callback: {e}")
+        import traceback
+        traceback.print_exc()
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
         return redirect(f"{frontend_url}?auth=error&message={str(e)}")
 
