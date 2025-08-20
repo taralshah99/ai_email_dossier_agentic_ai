@@ -29,6 +29,9 @@ load_dotenv()
 import os
 os.environ['CREWAI_DISABLE_TELEMETRY'] = 'true'
 
+# Allow insecure transport for local OAuth development
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 def extract_company_name_from_domain(domain_part):
     """
     Enhanced company name extraction from domain parts.

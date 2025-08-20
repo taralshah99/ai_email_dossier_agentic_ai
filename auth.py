@@ -12,6 +12,9 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+# Allow insecure transport for local development (MUST be set before importing OAuth libraries)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 # OAuth 2.0 configuration
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 CLIENT_SECRETS_FILE = "web_credentials.json"  # or "credentials.json" if you renamed it
@@ -25,6 +28,7 @@ def get_google_oauth_flow():
         )
         # Use environment variable for redirect URI
         flow.redirect_uri = os.getenv('OAUTH_REDIRECT_URI', 'http://localhost:5000/api/auth/callback')
+        
         return flow
     except Exception as e:
         print(f"Error creating OAuth flow: {e}")
