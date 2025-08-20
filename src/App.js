@@ -1081,6 +1081,7 @@ function App() {
             className={`primary ${isLoading ? 'loading' : ''}`}
             onClick={handleSearch} 
             disabled={isLoading}
+            title="Returns a list of Gmail threads matching your search criteria for selection"
           >
             {!isLoading && <Search size={20} />}
             {isLoading ? 'Searching...' : 'Find Relevant Emails'}
@@ -1134,6 +1135,7 @@ function App() {
                 <TabButton 
                   className={activeDossierTab === 'agenda' ? 'active' : ''}
                   onClick={() => setActiveDossierTab('agenda')}
+                  title="Shows chronological email summaries, extracted meeting agenda items, participants, dates, and final conclusions"
                 >
                   <FileText size={16} />
                   Till Date Agenda
@@ -1143,6 +1145,7 @@ function App() {
                 <TabButton 
                   className={activeDossierTab === 'meeting' ? 'active' : ''}
                   onClick={() => setActiveDossierTab('meeting')}
+                  title="Displays a professional meeting flow document with context, objectives, discussion points, decisions, and action items"
                 >
                   <Calendar size={16} />
                   Meeting Flow Dossier
@@ -1152,6 +1155,7 @@ function App() {
                 <TabButton 
                   className={activeDossierTab === 'client' ? 'active' : ''}
                   onClick={() => setActiveDossierTab('client')}
+                  title="Shows detailed client research report with company background, industry analysis, business challenges, and strategic positioning"
                 >
                   <User size={16} />
                   Client Dossier
@@ -1161,6 +1165,7 @@ function App() {
                 <TabButton 
                   className={activeDossierTab === 'legacy' ? 'active' : ''}
                   onClick={() => setActiveDossierTab('legacy')}
+                  title="Shows basic meeting flow summary and client details in legacy format"
                 >
                   <FileText size={16} />
                   Legacy Dossier
@@ -1252,6 +1257,7 @@ function App() {
               className={`primary ${isProcessing ? 'loading' : ''}`}
               onClick={handleProcessThreads} 
               disabled={isProcessing}
+              title="Extracts participant info, dates, subjects, and client names from selected threads - prepares data for analysis"
             >
               {!isProcessing && <Sparkles size={18} />}
               {isProcessing ? 'Processing...' : `Process Threads (${selectedThreads.length})`}
@@ -1260,6 +1266,7 @@ function App() {
               className="secondary"
               onClick={() => setSelectedThreads([])} 
               disabled={isProcessing}
+              title="Clears your current thread selection - lets you choose different emails"
             >
               Clear Selection
             </Button>
@@ -1273,6 +1280,7 @@ function App() {
               className={`primary ${isAnalyzing ? 'loading' : ''}`}
               onClick={handleGenerateTillDateAgenda} 
               disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+              title="Produces detailed analysis with email summaries, meeting agenda items, participant list, timeline, and actionable conclusions"
             >
               {!isAnalyzing && <FileText size={18} />}
               {isAnalyzing ? 'Generating...' : '1. Till Date Agenda'}
@@ -1282,6 +1290,7 @@ function App() {
               className={`primary ${isGeneratingMeeting ? 'loading' : ''}`}
               onClick={handleGenerateMeetingFlow} 
               disabled={isGeneratingMeeting || isAnalyzing || isGeneratingClient}
+              title="Creates a professional meeting document with structured flow, key decisions, blockers, next steps, and responsible parties"
             >
               {!isGeneratingMeeting && <Calendar size={18} />}
               {isGeneratingMeeting ? 'Generating...' : '2. Meeting Flow Dossier'}
@@ -1388,6 +1397,7 @@ function App() {
                 setActiveDossierTab('agenda'); // Reset to default tab
               }}
               disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+              title="Resets everything - clears all analysis results and dossiers so you can start over with new emails"
             >
               Start Over
             </Button>
