@@ -43,7 +43,7 @@ def initiate_oauth_flow():
         # Generate authorization URL
         authorization_url, state = flow.authorization_url(
             access_type='offline',  # Enable refresh token
-            include_granted_scopes='true',  # Incremental authorization
+            include_granted_scopes='false',  # Don't include previously granted scopes
             prompt='consent'  # Force consent screen to get refresh token
         )
         

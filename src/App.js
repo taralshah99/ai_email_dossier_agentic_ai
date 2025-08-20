@@ -682,7 +682,7 @@ function AuthenticatedApp() {
   const { user, logout, isLoggingOut } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(true);
   const [startDate, setStartDate] = useState(new Date(2023, 0, 1));
-  const [endDate, setEndDate] = useState(new Date(2025, 7, 5));
+  const [endDate, setEndDate] = useState(new Date());
   const [activeStartDateRange, setActiveStartDateRange] = useState('');
   const [activeEndDateRange, setActiveEndDateRange] = useState('');
   const [keyword, setKeyword] = useState('');

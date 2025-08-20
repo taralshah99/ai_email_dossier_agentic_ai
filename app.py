@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from crewai import Crew, Process, Task, LLM
 from crewai_agents import MeetingAgents
-from gmail_utils import get_gmail_service, list_email_threads, get_email_thread, get_thread_subject_and_sender
+from gmail_utils import list_email_threads, get_email_thread, get_thread_subject_and_sender, get_gmail_user_profile
 import requests
 
 # Import our authentication modules
@@ -1098,7 +1098,7 @@ def process_threads_metadata_only(thread_ids: list):
     all_dates = []
     all_messages = []  # Collect all messages for client name extraction
     
-    service = get_gmail_service()
+    service = get_auth_gmail_service()
     
     for thread_id in thread_ids:
         try:
@@ -1117,7 +1117,7 @@ def process_threads_metadata_only(thread_ids: list):
             
             # Extract participants
             thread_participants = {}
-            participants = extract_participants_from_messages(messages)
+            participants = extract_all_participants_from_emails(messages, service)
             
             # Add Gmail user to participants
             try:
