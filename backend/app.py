@@ -552,9 +552,17 @@ Session(app)
 setup_session_cleanup()
 
 # Configure CORS with proper settings
+# Parse CORS origins from environment variable based on FLASK_ENV
+flask_env = os.getenv('FLASK_ENV', 'development')
+if flask_env == 'production':
+    cors_origins_env = os.getenv('PROD_CORS_ORIGINS')
+else:
+    cors_origins_env = os.getenv('DEV_CORS_ORIGINS')
+cors_origins = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()] if cors_origins_env else []
+
 CORS(app, 
      supports_credentials=True, 
-     origins=['http://localhost:3000', 'http://127.0.0.1:3000'],
+     origins=cors_origins,
      allow_headers=['Content-Type', 'Authorization'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
