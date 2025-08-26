@@ -11,7 +11,7 @@ from flask_session import Session #type: ignore
 from dotenv import load_dotenv
 
 # Import gmail_utils and requests first (these don't depend on CrewAI)
-from gmail_utils import list_email_threads, get_email_thread, get_thread_subject_and_sender, get_gmail_user_profile
+from gmail_utils import list_email_threads, get_email_thread, get_thread_subject_and_sender, get_gmail_user_profile, extract_participants_from_messages
 import requests
 
 # Import CrewAI only when needed (lazy import to avoid .env encoding issues)
@@ -515,6 +515,10 @@ def ensure_gmail_service():
         # Use our new authentication system
         return get_auth_gmail_service()
     except Exception as e:
+        print(f"[ensure_gmail_service] Authentication error: {e}")
+        # For debugging, try to continue without authentication
+        print("[ensure_gmail_service] Attempting to continue without authentication...")
+        # You might want to return a mock service or handle this differently
         raise RuntimeError(
             f"Gmail service is not available: {str(e)}. Please ensure you are logged in."
         )
@@ -692,7 +696,15 @@ def structure_analysis_output(text: str) -> dict:
         return None
 
     json_obj = _try_parse_json(text)
-    if isinstance(json_obj, dict) and ("groups" in json_obj or "global_summary" in json_obj):
+    print(f"[structure_analysis_output] JSON parsing result: {type(json_obj)}")
+    if isinstance(json_obj, dict):
+        print(f"[structure_analysis_output] JSON keys: {list(json_obj.keys())}")
+        if "irrelevant_threads" in json_obj:
+            print(f"[structure_analysis_output] Irrelevant threads found: {len(json_obj['irrelevant_threads'])}")
+            for i, thread in enumerate(json_obj['irrelevant_threads']):
+                print(f"[structure_analysis_output] Thread {i} keys: {list(thread.keys()) if isinstance(thread, dict) else 'Not a dict'}")
+    
+    if isinstance(json_obj, dict) and ("groups" in json_obj or "global_summary" in json_obj or "irrelevant_threads" in json_obj):
         # Normalize grouped structure
         groups_in = json_obj.get("groups", []) or []
         groups_out = []
@@ -713,6 +725,45 @@ def structure_analysis_output(text: str) -> dict:
             "products": global_summary_in.get("products") or [],
         }
 
+        # Handle irrelevant_threads
+        irrelevant_threads_in = json_obj.get("irrelevant_threads", []) or []
+        irrelevant_threads_out = []
+        for thread in irrelevant_threads_in:
+            # Generate fallback content if AI didn't provide it
+            thread_subject = thread.get("thread_subject") or "Unknown Thread"
+            summary = thread.get("summary") or ""
+            reason_for_irrelevancy = thread.get("reason_for_irrelevancy") or ""
+            email_summaries = thread.get("email_summaries") or []
+            discussion_agenda = thread.get("discussion_agenda") or ""
+            
+            # If AI didn't provide summary, create a basic one
+            if not summary:
+                summary = f"This thread contains discussions about {thread_subject}. The conversation includes multiple messages exchanged between participants."
+            
+            # If AI didn't provide discussion agenda, create one from the subject
+            if not discussion_agenda:
+                discussion_agenda = f"Discussion focused on {thread_subject} and related topics."
+            
+            # If AI didn't provide reason for irrelevancy, create one
+            if not reason_for_irrelevancy:
+                reason_for_irrelevancy = f"This thread is separate from other conversations and focuses on {thread_subject}."
+            
+            # If AI didn't provide email summaries, create basic ones
+            if not email_summaries or len(email_summaries) == 0:
+                email_summaries = [
+                    f"Initial contact regarding {thread_subject}",
+                    f"Follow-up discussion about {thread_subject}",
+                    f"Final communication on {thread_subject}"
+                ]
+            
+            irrelevant_threads_out.append({
+                "thread_subject": thread_subject,
+                "summary": summary,
+                "reason_for_irrelevancy": reason_for_irrelevancy,
+                "email_summaries": email_summaries,
+                "discussion_agenda": discussion_agenda,
+            })
+
         # Derive top-level client/product info if available (first product seen)
         top_client_name = "Unknown Client"
         top_product_name = "Unknown Product"
@@ -732,6 +783,7 @@ def structure_analysis_output(text: str) -> dict:
         return {
             "groups": groups_out,
             "global_summary": global_summary_out,
+            "irrelevant_threads": irrelevant_threads_out,
             "client_name": top_client_name,
             "product_name": top_product_name,
             "product_domain": top_product_domain,
@@ -916,7 +968,7 @@ def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
         return 0.0
     return dot / (norm_a * norm_b)
 
-def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, query=None, deep_scan: bool = False):
+def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, deep_scan: bool = False):
     """Gmail-native search only using the q parameter, broadened for better parity with Gmail UI.
 
     Changes vs previous:
@@ -1005,8 +1057,7 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
             if deduped:
                 search_parts.append("(" + " OR ".join(deduped) + ")")
 
-    if query:
-        search_parts.append(query)
+
 
     search_query = " ".join(search_parts).strip()
 
@@ -1037,11 +1088,21 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
                     if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
                         snippet = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
                         break
+        # Extract participants from messages
+        participants = extract_participants_from_messages(messages) if messages else {
+            'sender': [],
+            'recipients': [],
+            'cc': [],
+            'bcc': []
+        }
+        
         relevant_threads.append({
             "id": thread_id,
             "subject": subject or "No Subject",
             "sender": sender or "Unknown Sender",
-            "body": f"{subject or ''}\n{snippet or ''}".strip()
+            "body": f"{subject or ''}\n{snippet or ''}".strip(),
+            "message_count": len(messages) if messages else 0,
+            "participants": participants
         })
 
     # Optional deterministic substring augmentation: capture threads whose body contains the keyword
@@ -1062,9 +1123,7 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
             broad_parts.append(f"before:{end_inclusive}")
         if from_email:
             broad_parts.append(f"from:{from_email}")
-        # Keep user's advanced query constraints, but omit the keyword to avoid excluding matches
-        if query:
-            broad_parts.append(query)
+
         # Optionally include anywhere for more parity
         if os.getenv("BODY_SUBSTRING_IN_ANYWHERE", "true").lower() == "true":
             broad_parts.append("in:anywhere")
@@ -1121,16 +1180,37 @@ def find_relevant_threads(start_date, end_date, keyword=None, from_email=None, q
                 body_preview = ""
                 if msgs and "snippet" in msgs[0]:
                     body_preview = msgs[0]["snippet"]
+                # Extract participants from messages
+                participants = extract_participants_from_messages(msgs) if msgs else {
+                    'sender': [],
+                    'recipients': [],
+                    'cc': [],
+                    'bcc': []
+                }
+                
                 relevant_threads.append({
                     "id": thread_id,
                     "subject": subject2 or "No Subject",
                     "sender": sender2 or "Unknown Sender",
-                    "body": f"{subject2 or ''}\n{body_preview or ''}".strip()
+                    "body": f"{subject2 or ''}\n{body_preview or ''}".strip(),
+                    "message_count": len(msgs) if msgs else 0,
+                    "participants": participants
                 })
                 found_ids.add(thread_id)
 
     return relevant_threads
 
+
+def convert_sets_to_lists(obj):
+    """Recursively convert all sets to lists in a nested data structure."""
+    if isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_sets_to_lists(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_sets_to_lists(item) for item in obj]
+    else:
+        return obj
 
 def process_threads_metadata_only(thread_ids: list):
     """
@@ -1140,150 +1220,98 @@ def process_threads_metadata_only(thread_ids: list):
     if not thread_ids:
         return None
     
-    all_thread_metadata = []
-    combined_participants = {}
-    all_dates = []
-    all_messages = []  # Collect all messages for client name extraction
+    print(f"[process_threads_metadata_only] Processing metadata for {len(thread_ids)} threads...")
     
     service = get_auth_gmail_service()
     
-    for thread_id in thread_ids:
-        try:
-            # Get thread metadata
-            subject, sender = get_thread_subject_and_sender(service, thread_id)
-            if not subject:
-                continue
-                
-            # Get messages for metadata extraction
-            messages = get_email_thread(service, thread_id)
-            if not messages:
-                continue
-            
-            # Store messages for client name extraction
-            all_messages.extend(messages)
-            
-            # Extract participants
-            thread_participants = {}
-            participants = extract_all_participants_from_emails(messages, service)
-            
-            # Add Gmail user to participants
-            try:
-                gmail_profile = get_gmail_user_profile(service)
-                if gmail_profile:
-                    gmail_user_email = gmail_profile.get("emailAddress", "").lower()
-                    if gmail_user_email and gmail_user_email not in participants:
-                        local_part = gmail_user_email.split('@')[0]
-                        if '.' in local_part:
-                            name_parts = [part for part in local_part.split('.') if part]
-                            display_name = ' '.join(part.capitalize() for part in name_parts)
-                        elif '_' in local_part:
-                            name_parts = [part for part in local_part.split('_') if part]
-                            display_name = ' '.join(part.capitalize() for part in name_parts)
-                        else:
-                            display_name = local_part.capitalize()
-                        
-                        participants[gmail_user_email] = {
-                            "email": gmail_user_email,
-                            "display_name": display_name,
-                            "roles": ["gmail_user"]
-                        }
-            except Exception as e:
-                print(f"[process_threads_metadata_only] Error adding Gmail user: {e}")
-            
-            thread_participants = participants
-            
-            # Merge participants
-            for email, participant in thread_participants.items():
-                if email not in combined_participants:
-                    combined_participants[email] = participant
-                else:
-                    existing_roles = set(combined_participants[email]["roles"])
-                    new_roles = set(participant["roles"])
-                    combined_participants[email]["roles"] = list(existing_roles.union(new_roles))
-            
-            # Extract dates
-            thread_dates = []
-            for msg in messages:
-                headers = msg.get("payload", {}).get("headers", [])
-                for header in headers:
-                    if header.get("name", "").lower() == "date":
-                        try:
-                            from email.utils import parsedate_to_datetime
-                            date_value = header.get("value", "")
-                            if date_value:
-                                date_obj = parsedate_to_datetime(date_value)
-                                if date_obj:
-                                    thread_dates.append(date_obj)
-                                    all_dates.append(date_obj)
-                        except Exception as e:
-                            print(f"Error parsing date '{header.get('value', '')}': {e}")
-                            pass
-            
-            # Sort dates
-            thread_dates.sort()
-            
-            thread_metadata = {
-                "thread_id": thread_id,
-                "subject": subject,
-                "sender": sender,
-                "message_count": len(messages),
-                "participants": thread_participants,
-                "first_email_date": thread_dates[0].strftime("%Y-%m-%d %H:%M:%S") if thread_dates else None,
-                "last_email_date": thread_dates[-1].strftime("%Y-%m-%d %H:%M:%S") if thread_dates else None
-            }
-            all_thread_metadata.append(thread_metadata)
-            
-        except Exception as e:
-            print(f"[process_threads_metadata_only] Error processing thread {thread_id}: {e}")
-            continue
+    # Use the new metadata processor for efficient processing
+    try:
+        from metadata_processor import process_multiple_threads_metadata
+        metadata_result = process_multiple_threads_metadata(thread_ids, service)
+        
+        # Extract processed data
+        combined_metadata = metadata_result["combined_metadata"]
+        all_thread_metadata = metadata_result["thread_metadatas"]
+    except Exception as e:
+        print(f"[process_threads_metadata_only] Error in metadata processing: {e}")
+        import traceback
+        traceback.print_exc()
+        # Create fallback metadata
+        combined_metadata = {
+            "thread_count": len(thread_ids),
+            "total_participants": 0,
+            "participants": {},
+            "first_email_date": None,
+            "last_email_date": None,
+            "threads": [],
+            "total_messages": 0,
+            "date_range_days": 0
+        }
+        all_thread_metadata = []
     
-    # Extract client names from all collected messages using proper logic that filters out Gmail user's domain
+    # Collect all messages for client name extraction
+    all_messages = []
+    for thread_meta in all_thread_metadata:
+        thread_id = thread_meta["thread_id"]
+        try:
+            messages = get_email_thread(service, thread_id)
+            if messages:
+                all_messages.extend(messages)
+        except Exception as e:
+            print(f"[process_threads_metadata_only] Error getting messages for thread {thread_id}: {e}")
+    
     print(f"[process_threads_metadata_only] Starting client name extraction with {len(all_messages)} messages")
     if all_messages:
-        domain_based_client_names = extract_client_name_from_domains(all_messages, service)
-        print(f"[process_threads_metadata_only] Extracted client names: {domain_based_client_names}")
-        
-        # Additional debugging: check what domains were found
-        if domain_based_client_names == ["Unknown Client"]:
-            print(f"[process_threads_metadata_only] WARNING: Client extraction returned 'Unknown Client'")
-            # Let's check the first few messages for debugging
-            for i, msg in enumerate(all_messages[:2]):
-                headers = msg.get("payload", {}).get("headers", [])
-                from_header = next((h["value"] for h in headers if h["name"].lower() == "from"), "Not found")
-                to_header = next((h["value"] for h in headers if h["name"].lower() == "to"), "Not found")
-                print(f"[process_threads_metadata_only] Message {i+1} - From: {from_header}, To: {to_header}")
+        try:
+            domain_based_client_names = extract_client_name_from_domains(all_messages, service)
+            print(f"[process_threads_metadata_only] Extracted client names: {domain_based_client_names}")
+            
+            # If no clients found, set to None
+            if not domain_based_client_names:
+                domain_based_client_names = None
+                print(f"[process_threads_metadata_only] No client names found, setting to None")
+        except Exception as e:
+            print(f"[process_threads_metadata_only] Error in client name extraction: {e}")
+            domain_based_client_names = None
     else:
-        domain_based_client_names = ["Unknown Client"]
-        print(f"[process_threads_metadata_only] No messages found, using fallback client names")
-    
-    # Create combined metadata
-    if all_dates:
-        all_dates.sort()
-    
-    combined_metadata = {
-        "thread_count": len(thread_ids),
-        "total_participants": len(combined_participants),
-        "participants": {email: {
-            "email": p["email"],
-            "display_name": p["display_name"],
-            "roles": list(p["roles"])
-        } for email, p in combined_participants.items()},
-        "first_email_date": all_dates[0].strftime("%Y-%m-%d %H:%M:%S") if all_dates else None,
-        "last_email_date": all_dates[-1].strftime("%Y-%m-%d %H:%M:%S") if all_dates else None,
-        "threads": all_thread_metadata
-    }
+        domain_based_client_names = None
+        print(f"[process_threads_metadata_only] No messages found, setting client names to None")
     
     # Basic product info extraction (without AI analysis)
     product_info = {"product_name": "Unknown Product", "product_domain": "general product"}
     
-    return {
-        "thread_count": len(thread_ids),
-        "combined_metadata": combined_metadata,
-        "available_client_names": domain_based_client_names,
-        "product_name": product_info["product_name"],
-        "product_domain": product_info["product_domain"],
-        "processed_thread_ids": thread_ids
-    }
+    try:
+        result = {
+            "thread_count": len(thread_ids),
+            "combined_metadata": combined_metadata,
+            "available_client_names": domain_based_client_names if domain_based_client_names else [],
+            "product_name": product_info["product_name"],
+            "product_domain": product_info["product_domain"],
+            "processed_thread_ids": thread_ids
+        }
+        
+        # Convert any remaining sets to lists for JSON serialization
+        result = convert_sets_to_lists(result)
+        
+        return result
+    except Exception as e:
+        print(f"[process_threads_metadata_only] Error creating return object: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return a minimal valid response
+        result = {
+            "thread_count": len(thread_ids),
+            "combined_metadata": {"thread_count": len(thread_ids), "total_participants": 0, "participants": {}, "threads": []},
+            "available_client_names": [],
+            "product_name": "Unknown Product",
+            "product_domain": "general product",
+            "processed_thread_ids": thread_ids
+        }
+        
+        # Convert any remaining sets to lists for JSON serialization
+        result = convert_sets_to_lists(result)
+        
+        return result
 
 def analyze_thread_content(thread_id: str):
     try:
@@ -1488,115 +1516,156 @@ def analyze_multiple_threads(thread_ids: list):
     if not thread_ids:
         return None
 
-    all_thread_contents = []
-    all_subjects = []
-    all_thread_metadata = []
-    combined_participants = {}
-    all_dates = []
-
-    service = ensure_gmail_service()
-    for thread_id in thread_ids:
-        messages = get_email_thread(service, thread_id)
-        subject, sender = get_thread_subject_and_sender(service, thread_id)
-        
-        # Extract thread metadata
-        thread_participants = extract_all_participants_from_emails(messages, service)
-        thread_dates = []
-        
-        # Ensure Gmail user is always included in this thread's participants
+    print(f"[analyze_multiple_threads] Starting analysis for {len(thread_ids)} threads...")
+    
+    # Special handling for single thread - redirect to single thread analysis
+    if len(thread_ids) == 1:
+        print(f"[analyze_multiple_threads] Single thread detected, redirecting to single thread analysis")
         try:
-            from gmail_utils import get_gmail_user_profile
-            gmail_profile = get_gmail_user_profile(service)
-            if gmail_profile:
-                gmail_user_email = gmail_profile.get("emailAddress", "").lower()
-                if gmail_user_email and gmail_user_email not in thread_participants:
-                    local_part = gmail_user_email.split('@')[0]
-                    if '.' in local_part:
-                        name_parts = [part for part in local_part.split('.') if part]
-                        display_name = ' '.join(part.capitalize() for part in name_parts)
-                    elif '_' in local_part:
-                        name_parts = [part for part in local_part.split('_') if part]
-                        display_name = ' '.join(part.capitalize() for part in name_parts)
-                    else:
-                        display_name = local_part.capitalize()
-                    
-                    thread_participants[gmail_user_email] = {
-                        "email": gmail_user_email,
-                        "display_name": display_name,
-                        "roles": ["gmail_user"]
-                    }
+            single_result = analyze_thread_content(thread_ids[0])
+            print(f"[analyze_multiple_threads] Single thread analysis completed, adapting format")
+            
+            # Adapt single thread result to multiple thread format
+            adapted_result = {
+                "analysis": single_result["analysis"],
+                "structured_analysis": single_result["structured_analysis"],
+                "product_name": single_result["product_name"],
+                "product_domain": single_result["product_domain"],
+                "thread_count": 1,
+                "combined_metadata": {
+                    "thread_count": 1,
+                    "total_participants": len(single_result.get("available_client_names", [])),
+                    "participants": {},
+                    "threads": []
+                },
+                "available_client_names": single_result["available_client_names"]
+            }
+            return adapted_result
         except Exception as e:
-            print(f"[analyze_multiple_threads] Error adding Gmail user to thread participants: {e}")
-        
-        # Merge participants
-        for email, participant in thread_participants.items():
-            if email not in combined_participants:
-                combined_participants[email] = participant
-            else:
-                # Convert both to sets, merge, then back to list
-                existing_roles = set(combined_participants[email]["roles"])
-                new_roles = set(participant["roles"])
-                combined_participants[email]["roles"] = list(existing_roles.union(new_roles))
-        
-        # Extract dates
-        for msg in messages:
-            headers = msg.get("payload", {}).get("headers", [])
-            for header in headers:
-                if header.get("name", "").lower() == "date":
-                    try:
-                        from email.utils import parsedate_to_datetime
-                        date_value = header.get("value", "")
-                        if date_value:
-                            date_obj = parsedate_to_datetime(date_value)
-                            if date_obj:  # Make sure we got a valid date object
-                                thread_dates.append(date_obj)
-                                all_dates.append(date_obj)
-                    except Exception as e:
-                        # Log the error but continue processing
-                        print(f"Error parsing date '{header.get('value', '')}': {e}")
-                        pass
-        
-        # Sort dates before accessing
-        thread_dates.sort()
-        
-        thread_metadata = {
-            "thread_id": thread_id,
-            "subject": subject,
-            "sender": sender,
-            "message_count": len(messages),
-            "participants": thread_participants,
-            "first_email_date": thread_dates[0].strftime("%Y-%m-%d %H:%M:%S") if thread_dates else None,
-            "last_email_date": thread_dates[-1].strftime("%Y-%m-%d %H:%M:%S") if thread_dates else None
-        }
-        all_thread_metadata.append(thread_metadata)
+            print(f"[analyze_multiple_threads] Single thread analysis failed: {e}, continuing with multiple thread analysis")
+            # Continue with normal multiple thread analysis if single fails
+    
+    try:
+        service = ensure_gmail_service()
+        print(f"[analyze_multiple_threads] Gmail service obtained successfully")
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error getting Gmail service: {e}")
+        return {"error": f"Failed to get Gmail service: {str(e)}"}
+    
+    try:
+        # Use the new metadata processor for efficient and clear processing
+        from metadata_processor import process_multiple_threads_metadata
+        metadata_result = process_multiple_threads_metadata(thread_ids, service)
+        print(f"[analyze_multiple_threads] Metadata processing completed successfully")
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error in metadata processing: {e}")
+        return {"error": f"Failed to process metadata: {str(e)}"}
+    
+    # Extract processed data
+    combined_metadata = metadata_result["combined_metadata"]
+    all_thread_metadata = metadata_result["thread_metadatas"]
+    all_subjects = metadata_result["all_subjects"]
+    all_content = metadata_result["all_content"]
+    relevancy_analysis = metadata_result.get("relevancy_analysis", {})
+    
+    # Get relevant groups and irrelevant threads
+    relevant_groups = relevancy_analysis.get("relevant_groups", [])
+    irrelevant_threads = relevancy_analysis.get("irrelevant_threads", [])
+    
+    print(f"[analyze_multiple_threads] Relevancy analysis results:")
+    print(f"  - Relevant groups: {len(relevant_groups)}")
+    print(f"  - Irrelevant threads: {len(irrelevant_threads)}")
+    
+    # Prepare content for AI analysis - separate relevant and irrelevant
+    relevant_content = []
+    irrelevant_content = []
+    
+    # Group content by relevancy
+    for group in relevant_groups:
+        group_content = []
+        for thread in group:
+            thread_idx = next((i for i, tm in enumerate(all_thread_metadata) if tm["thread_id"] == thread["thread_id"]), None)
+            if thread_idx is not None and thread_idx < len(all_content):
+                group_content.append(all_content[thread_idx])
+        if group_content:
+            relevant_content.append("\n\n".join(group_content))
+    
+    # Add irrelevant threads as separate content
+    for thread in irrelevant_threads:
+        thread_idx = next((i for i, tm in enumerate(all_thread_metadata) if tm["thread_id"] == thread["thread_id"]), None)
+        if thread_idx is not None and thread_idx < len(all_content):
+            irrelevant_content.append(all_content[thread_idx])
+    
+    # NEW APPROACH: Process irrelevant threads individually to get proper content
+    processed_irrelevant_threads = []
+    if irrelevant_threads:
+        print(f"[analyze_multiple_threads] Processing {len(irrelevant_threads)} irrelevant threads individually...")
+        for i, thread in enumerate(irrelevant_threads):
+            try:
+                print(f"[analyze_multiple_threads] Processing irrelevant thread {i+1}/{len(irrelevant_threads)}: {thread.get('subject', 'Unknown')}")
+                
+                # Process this thread individually using single thread analysis
+                individual_result = analyze_thread_content(thread["thread_id"])
+                
+                if individual_result and "structured_analysis" in individual_result:
+                    # Extract the content we need from individual analysis
+                    individual_analysis = individual_result["structured_analysis"]
+                    
+                    # Create a properly formatted irrelevant thread object
+                    processed_thread = {
+                        "thread_subject": thread.get("subject", f"Thread {i+1}"),
+                        "summary": individual_analysis.get("summary", f"Analysis of {thread.get('subject', 'thread')}"),
+                        "reason_for_irrelevancy": f"This thread focuses on {thread.get('subject', 'different topics')} which is separate from other business discussions.",
+                        "email_summaries": individual_analysis.get("email_summaries", []),
+                        "discussion_agenda": individual_analysis.get("agenda", f"Discussion focused on {thread.get('subject', 'various topics')}")
+                    }
+                    
+                    processed_irrelevant_threads.append(processed_thread)
+                    print(f"[analyze_multiple_threads] Successfully processed thread {i+1}")
+                else:
+                    print(f"[analyze_multiple_threads] Failed to get structured analysis for thread {i+1}")
+                    
+            except Exception as e:
+                print(f"[analyze_multiple_threads] Error processing individual thread {i+1}: {e}")
+                # Create a fallback thread object
+                processed_thread = {
+                    "thread_subject": thread.get("subject", f"Thread {i+1}"),
+                    "summary": f"Thread contains {thread.get('message_count', 0)} messages discussing {thread.get('subject', 'various topics')}.",
+                    "reason_for_irrelevancy": f"This thread is separate from other business discussions.",
+                    "email_summaries": [f"Analysis of {thread.get('subject', 'thread content')}"],
+                    "discussion_agenda": f"Discussion focused on {thread.get('subject', 'various topics')}"
+                }
+                processed_irrelevant_threads.append(processed_thread)
+    
+    # Combine all content for analysis (only relevant groups now)
+    combined_content = "\n\n".join(all_content)
+    
+    try:
+        analysis_agent = get_agents().meeting_agenda_extractor()
+        print(f"[analyze_multiple_threads] Analysis agent obtained successfully")
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error getting analysis agent: {e}")
+        return {"error": f"Failed to get analysis agent: {str(e)}"}
 
-        email_content = []
-        for msg in messages:
-            if "snippet" in msg:
-                email_content.append(msg["snippet"])
-            elif msg.get("payload", {}).get("parts"):
-                for part in msg["payload"]["parts"]:
-                    if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                        email_content.append(base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8"))
-
-        thread_text = "\n".join(email_content)
-
-        # NEW: prepend extracted email metadata for LLM to use in client name inference
-        metadata_str = format_email_metadata(messages)  # thread_emails should be the raw email dicts with from/to/cc
-        thread_text = f"{metadata_str}\n\n{thread_text}"
-
-        all_thread_contents.append(f"=== THREAD: {subject} ===Z\n{thread_text}")
-        all_subjects.append(subject)
-
-
-    combined_content = "\n\n".join(all_thread_contents)
-    analysis_agent = get_agents().meeting_agenda_extractor()
-
-    # New grouped multi-thread prompt with strict JSON output
+    # Enhanced grouped multi-thread prompt with relevancy-aware structure
     thread_subjects_block = "\n".join([f"- {s}" for s in all_subjects])
+    
+    # Create relevancy context for AI
+    relevancy_context = ""
+    if relevant_groups:
+        relevancy_context += f"\n\nRELEVANT THREAD GROUPS ({len(relevant_groups)} groups):\n"
+        for i, group in enumerate(relevant_groups):
+            group_subjects = [t["subject"] for t in group]
+            relevancy_context += f"Group {i+1}: {', '.join(group_subjects)}\n"
+    
+    if irrelevant_threads:
+        irrelevant_subjects = [t["subject"] for t in irrelevant_threads]
+        relevancy_context += f"\nIRRELEVANT THREADS ({len(irrelevant_threads)} threads):\n"
+        relevancy_context += f"{', '.join(irrelevant_subjects)}\n"
+    
     json_schema = (
         "{"
-        "\n  \"groups\": ["
+        "\n  \"relevant_groups\": ["
         "\n    {"
         "\n      \"title\": \"string\","
         "\n      \"thread_subjects\": [\"string\"],"
@@ -1604,42 +1673,71 @@ def analyze_multiple_threads(thread_ids: list):
         "\n      \"meeting_agenda\": [\"string\"],"
         "\n      \"meeting_date_time\": [\"string\"],"
         "\n      \"final_conclusion\": \"string\","
-        "\n      \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ]"
+        "\n      \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ],"
+        "\n      \"participant_overlap\": \"string\""
+        "\n    }"
+        "\n  ],"
+        "\n  \"irrelevant_threads\": ["
+        "\n    {"
+        "\n      \"thread_subject\": \"string\","
+        "\n      \"summary\": \"string\","
+        "\n      \"reason_for_irrelevancy\": \"string\","
+        "\n      \"email_summaries\": [\"string\"],"
+        "\n      \"discussion_agenda\": \"string\""
         "\n    }"
         "\n  ],"
         "\n  \"global_summary\": {"
         "\n    \"final_conclusion\": \"string\","
-        "\n    \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ]"
+        "\n    \"products\": [ { \"client_name\": \"string\", \"product_name\": \"string\", \"product_domain\": \"string\" } ],"
+        "\n    \"relevancy_insights\": \"string\""
         "\n  }"
         "\n}"
     )
 
-    # Import CrewAI components when needed
-    from crewai import Task, Crew, Process
+    try:
+        # Import CrewAI components when needed
+        from crewai import Task, Crew, Process
 
-    task = Task(
-        description=(
-            f"You are given {len(thread_ids)} email threads. Analyze all emails together. "
-            "Your job is to intelligently group emails by topics such as product/service discussed, meeting agendas, feature requests, demos/sales, bug reports, and general queries. "
-            "If two threads reference the same product or meeting, group them together."
-            "\n\nThread Subjects:\n"
-            f"{thread_subjects_block}\n\n"
-            "Output STRICTLY as minified JSON following this schema (no markdown, no prose, just JSON):\n"
-            f"{json_schema}\n\n"
-            "Rules:\n"
-            "- Provide clear human-readable group titles.\n"
-            "- For each group, include thread_subjects that contributed.\n"
-            "- Extract meeting_agenda and meeting_date_time where present.\n"
-            "- Include a group-specific final_conclusion.\n"
-            "- In global_summary, add a high-level final_conclusion and consolidated products/domains.\n\n"
-            f"EMAIL CONTENT START\n{combined_content}\nEMAIL CONTENT END"
-        ),
-        expected_output="Valid JSON matching the schema with grouped results and a global summary.",
-        agent=analysis_agent
-    )
+        task = Task(
+            description=(
+                f"You are given {len(thread_ids)} email threads. Analyze the RELEVANT threads together (irrelevant threads are processed separately). "
+                "Your job is to intelligently group RELEVANT emails by topics such as product/service discussed, meeting agendas, feature requests, demos/sales, bug reports, and general queries. "
+                "If two threads reference the same product or meeting, group them together.\n\n"
+                f"Thread Subjects:\n{thread_subjects_block}\n\n"
+                "Output STRICTLY as minified JSON following this schema (no markdown, no prose, just JSON):\n"
+                f"{json_schema}\n\n"
+                "Rules:\n"
+                "- Focus ONLY on RELEVANT threads that are related to each other.\n"
+                "- Provide clear human-readable group titles based on the actual content and topics discussed.\n"
+                "- For each group, include thread_subjects that contributed to that group.\n"
+                "- For email_summaries: Create detailed chronological summaries of EACH EMAIL in the conversation. Each summary should include sender name, main intent, key facts, decisions made, and any explicit asks or action items. Be specific and professional - these should read like: 'John from Company X reached out to discuss partnership opportunities' or 'Sarah confirmed the meeting for Tuesday at 2 PM'.\n"
+                "- Extract meeting_agenda and meeting_date_time where present in the emails.\n"
+                "- Include a group-specific final_conclusion that covers outcomes, decisions, stakeholders, next steps, and deadlines.\n"
+                "- IMPORTANT: Do NOT create irrelevant_threads in this analysis - they are processed separately.\n"
+                "- In global_summary: Create relevancy_insights that explain the overall conversation agenda and what was actually discussed in the emails, focusing on business context and outcomes.\n"
+                "- Focus on ACTUAL EMAIL CONTENT and real business outcomes, not just metadata or thread organization.\n\n"
+                f"EMAIL CONTENT START\n{combined_content}\nEMAIL CONTENT END"
+            ),
+            expected_output="Valid JSON matching the schema with relevancy-aware grouped results and a global summary.",
+            agent=analysis_agent
+        )
 
-    crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
-    analysis_output = crew.kickoff()
+        crew = Crew(agents=[analysis_agent], tasks=[task], process=Process.sequential)
+        print(f"[analyze_multiple_threads] Starting CrewAI analysis...")
+        analysis_output = crew.kickoff()
+        print(f"[analyze_multiple_threads] CrewAI analysis completed successfully")
+        
+        # Debug: Print the raw AI output to see what's being generated
+        print(f"[analyze_multiple_threads] Raw AI output (first 500 chars): {str(analysis_output)[:500]}...")
+        print(f"[analyze_multiple_threads] Raw AI output length: {len(str(analysis_output))}")
+        
+        # More detailed debugging - print the full raw output for analysis
+        print(f"[analyze_multiple_threads] FULL RAW AI OUTPUT:")
+        print(str(analysis_output))
+        print(f"[analyze_multiple_threads] END OF RAW AI OUTPUT")
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error in CrewAI analysis: {e}")
+        return {"error": f"Failed to perform AI analysis: {str(e)}"}
 
     # Extract product info from structured analysis instead of raw text
     product_info = {"product_name": "Unknown Product", "product_domain": "general product"}
@@ -1679,7 +1777,10 @@ def analyze_multiple_threads(thread_ids: list):
     except Exception as e:
         print(f"[analyze_multiple_threads] Error extracting product info from JSON: {e}")
         # Fallback to old text-based extraction
-    product_info = parse_product_info(analysis_output)
+        try:
+            product_info = parse_product_info(analysis_output)
+        except Exception as e2:
+            print(f"[analyze_multiple_threads] Error in fallback product info extraction: {e2}")
     
     print(f"[analyze_multiple_threads] Extracted product info: {product_info}")
     
@@ -1694,15 +1795,49 @@ def analyze_multiple_threads(thread_ids: list):
             print(f"[analyze_multiple_threads] Error getting messages for client extraction from thread {thread_id}: {e}")
     
     if all_messages_for_client_extraction:
-        domain_based_client_names = extract_client_name_from_domains(all_messages_for_client_extraction, service)
-        print(f"[analyze_multiple_threads] Domain-based client names: {domain_based_client_names}")
+        try:
+            domain_based_client_names = extract_client_name_from_domains(all_messages_for_client_extraction, service)
+            print(f"[analyze_multiple_threads] Domain-based client names: {domain_based_client_names}")
+        except Exception as e:
+            print(f"[analyze_multiple_threads] Error in client name extraction: {e}")
+            domain_based_client_names = []
     else:
-        domain_based_client_names = ["Unknown Client"]
+        domain_based_client_names = []
     
     # Get the structured analysis and update client name using domain-based logic
-    structured_analysis = structure_analysis_output(analysis_output)
-    llm_client_name = structured_analysis.get("client_name", "Unknown Client")
-    print(f"[analyze_multiple_threads] LLM-extracted client name: {llm_client_name}")
+    try:
+        structured_analysis = structure_analysis_output(analysis_output)
+        llm_client_name = structured_analysis.get("client_name", "Unknown Client")
+        print(f"[analyze_multiple_threads] LLM-extracted client name: {llm_client_name}")
+        
+        # Debug: Print the structured analysis structure
+        print(f"[analyze_multiple_threads] Structured analysis keys: {list(structured_analysis.keys()) if isinstance(structured_analysis, dict) else 'Not a dict'}")
+        if isinstance(structured_analysis, dict):
+            if "relevant_groups" in structured_analysis:
+                print(f"[analyze_multiple_threads] Relevant groups count: {len(structured_analysis['relevant_groups'])}")
+                for i, group in enumerate(structured_analysis['relevant_groups']):
+                    print(f"[analyze_multiple_threads] Group {i}: {list(group.keys()) if isinstance(group, dict) else 'Not a dict'}")
+                    if isinstance(group, dict) and "email_summaries" in group:
+                        print(f"[analyze_multiple_threads] Group {i} email summaries count: {len(group['email_summaries'])}")
+            
+            if "irrelevant_threads" in structured_analysis:
+                print(f"[analyze_multiple_threads] Irrelevant threads count: {len(structured_analysis['irrelevant_threads'])}")
+                for i, thread in enumerate(structured_analysis['irrelevant_threads']):
+                    print(f"[analyze_multiple_threads] Irrelevant thread {i}: {list(thread.keys()) if isinstance(thread, dict) else 'Not a dict'}")
+                    if isinstance(thread, dict):
+                        print(f"[analyze_multiple_threads] Irrelevant thread {i} has summary: {'summary' in thread}")
+                        print(f"[analyze_multiple_threads] Irrelevant thread {i} has reason: {'reason_for_irrelevancy' in thread}")
+                        print(f"[analyze_multiple_threads] Irrelevant thread {i} has email_summaries: {'email_summaries' in thread}")
+                        print(f"[analyze_multiple_threads] Irrelevant thread {i} has discussion_agenda: {'discussion_agenda' in thread}")
+                        if 'email_summaries' in thread:
+                            print(f"[analyze_multiple_threads] Irrelevant thread {i} email_summaries count: {len(thread['email_summaries']) if isinstance(thread['email_summaries'], list) else 'Not a list'}")
+                        if 'discussion_agenda' in thread:
+                            print(f"[analyze_multiple_threads] Irrelevant thread {i} discussion_agenda: {thread['discussion_agenda'][:100]}...")
+        
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error in structured analysis: {e}")
+        structured_analysis = {"client_name": "Unknown Client"}
+        llm_client_name = "Unknown Client"
     
     # Always use domain-based client name as primary method (replacing LLM output)
     # Take the first domain-based client name if available, otherwise use LLM fallback
@@ -1716,36 +1851,37 @@ def analyze_multiple_threads(thread_ids: list):
     
     # Update the structured analysis with the final client name
     structured_analysis["client_name"] = final_client_name
-
-    # Create combined metadata
-    if all_dates:
-        all_dates.sort()
     
-    combined_metadata = {
-        "thread_count": len(thread_ids),
-        "total_participants": len(combined_participants),
-        "participants": {email: {
-            "email": p["email"],
-            "display_name": p["display_name"],
-            "roles": list(p["roles"])
-        } for email, p in combined_participants.items()},
-        "first_email_date": all_dates[0].strftime("%Y-%m-%d %H:%M:%S") if all_dates else None,
-        "last_email_date": all_dates[-1].strftime("%Y-%m-%d %H:%M:%S") if all_dates else None,
-        "threads": all_thread_metadata
-    }
+    # Add the processed irrelevant threads to the structured analysis
+    if processed_irrelevant_threads:
+        print(f"[analyze_multiple_threads] Adding {len(processed_irrelevant_threads)} processed irrelevant threads to structured analysis")
+        structured_analysis["irrelevant_threads"] = processed_irrelevant_threads
+    else:
+        print(f"[analyze_multiple_threads] No processed irrelevant threads to add")
 
-    return {
-        "analysis": str(analysis_output),
-        "structured_analysis": structured_analysis,
-        "product_name": product_info["product_name"],
-        "product_domain": product_info["product_domain"],
-        "thread_count": len(thread_ids),
-        "combined_metadata": combined_metadata,
-        "available_client_names": domain_based_client_names
-    }
+    # Combined metadata is already created by the metadata processor
+    # No need to recreate it here
 
-
-
+    try:
+        result = {
+            "analysis": str(analysis_output),
+            "structured_analysis": structured_analysis,
+            "product_name": product_info["product_name"],
+            "product_domain": product_info["product_domain"],
+            "thread_count": len(thread_ids),
+            "combined_metadata": combined_metadata,
+            "available_client_names": domain_based_client_names,
+            "relevancy_analysis": relevancy_analysis
+        }
+        
+        # Convert any sets to lists to ensure JSON serializability
+        result = convert_sets_to_lists(result)
+        
+        print(f"[analyze_multiple_threads] Successfully created result object")
+        return result
+    except Exception as e:
+        print(f"[analyze_multiple_threads] Error creating result object: {e}")
+        return {"error": f"Failed to create result object: {str(e)}"}
 
 
 def generate_meeting_flow_dossier(analysis_payload: dict):
@@ -1760,8 +1896,57 @@ def generate_meeting_flow_dossier(analysis_payload: dict):
     try:
         structured = analysis_payload.get("structured_analysis") if isinstance(analysis_payload, dict) else None
         raw = analysis_payload.get("raw_analysis") or analysis_payload.get("analysis") if isinstance(analysis_payload, dict) else None
+        relevancy_analysis = analysis_payload.get("relevancy_analysis") if isinstance(analysis_payload, dict) else None
     except Exception:
-        structured, raw = None, None
+        structured, raw, relevancy_analysis = None, None, None
+
+    # Check if we have irrelevant threads that need individual processing
+    irrelevant_threads = []
+    if relevancy_analysis and isinstance(relevancy_analysis, dict):
+        irrelevant_threads = relevancy_analysis.get("irrelevant_threads", [])
+    
+    # NEW APPROACH: Process irrelevant threads individually for meeting flow
+    processed_irrelevant_meeting_flows = []
+    if irrelevant_threads:
+        print(f"[generate_meeting_flow_dossier] Processing {len(irrelevant_threads)} irrelevant threads individually for meeting flow...")
+        for i, thread in enumerate(irrelevant_threads):
+            try:
+                print(f"[generate_meeting_flow_dossier] Processing irrelevant thread {i+1}/{len(irrelevant_threads)}: {thread.get('subject', 'Unknown')}")
+                
+                # Process this thread individually using single thread analysis
+                individual_result = analyze_thread_content(thread["thread_id"])
+                
+                if individual_result and "structured_analysis" in individual_result:
+                    # Generate meeting flow for this individual thread
+                    individual_meeting_result = generate_meeting_flow_dossier({
+                        "structured_analysis": individual_result["structured_analysis"],
+                        "raw_analysis": individual_result.get("raw_analysis"),
+                        "thread_metadata": individual_result.get("thread_metadata")
+                    })
+                    
+                    # Create a meeting flow entry for this thread
+                    processed_flow = {
+                        "thread_subject": thread.get("subject", f"Thread {i+1}"),
+                        "meeting_flow": individual_meeting_result.get("meeting_flow", ""),
+                        "product_name": individual_meeting_result.get("product_name", "Unknown Product"),
+                        "product_domain": individual_meeting_result.get("product_domain", "general product")
+                    }
+                    
+                    processed_irrelevant_meeting_flows.append(processed_flow)
+                    print(f"[generate_meeting_flow_dossier] Successfully processed meeting flow for thread {i+1}")
+                else:
+                    print(f"[generate_meeting_flow_dossier] Failed to get structured analysis for thread {i+1}")
+                    
+            except Exception as e:
+                print(f"[generate_meeting_flow_dossier] Error processing individual thread {i+1}: {e}")
+                # Create a fallback meeting flow for this thread
+                processed_flow = {
+                    "thread_subject": thread.get("subject", f"Thread {i+1}"),
+                    "meeting_flow": f"Meeting Flow Dossier for {thread.get('subject', 'thread')}\n\nMeeting Objectives\n- Review objectives for {thread.get('subject', 'this thread')}\n\nMeeting Context\nMeeting context for {thread.get('subject', 'this thread')}.\n\nKey Discussion Points for Meeting\n- Key points for {thread.get('subject', 'this thread')}\n\nDecisions Required\n- Decisions needed for {thread.get('subject', 'this thread')}\n\nCurrent Blockers to Address\n- Any blockers for {thread.get('subject', 'this thread')}\n\nProposed Meeting Agenda\n1. First agenda item\n2. Second agenda item\n\nNext Steps & Owners (Post-Meeting)\n- Action items for {thread.get('subject', 'this thread')}\n\nMeeting Process Improvements\n- Process improvements for {thread.get('subject', 'this thread')}",
+                    "product_name": "Unknown Product",
+                    "product_domain": "general product"
+                }
+                processed_irrelevant_meeting_flows.append(processed_flow)
 
     # Build source bundle
     source_sections: list[str] = []
@@ -1848,7 +2033,58 @@ Thread {i}: {thread.get('subject', 'N/A')}
     
     print(f"[generate_meeting_flow_dossier] Total source text length: {len(source_text)} chars")
 
-    # Create a meeting flow task
+    # If we have processed irrelevant threads, return a combined meeting flow
+    if processed_irrelevant_meeting_flows:
+        print(f"[generate_meeting_flow_dossier] Returning combined meeting flow for {len(processed_irrelevant_meeting_flows)} irrelevant threads")
+        
+        combined_flow = "Meeting Flow Dossier - Multiple Threads\n\n"
+        
+        for i, flow_data in enumerate(processed_irrelevant_meeting_flows, 1):
+            # Extract the individual meeting flow content
+            individual_flow_content = flow_data['meeting_flow']
+            
+            # Clean the individual flow content to remove only the top-level "Meeting Flow Dossier" header
+            # but preserve "Meeting Date and Time" and other sections
+            lines = individual_flow_content.splitlines()
+            cleaned_lines = []
+            skip_until_content = False
+            
+            for line in lines:
+                stripped = line.strip()
+                
+                # Skip the top-level "Meeting Flow Dossier" header
+                if stripped == "Meeting Flow Dossier":
+                    skip_until_content = True
+                    continue
+                
+                # If we're skipping, continue until we find actual content
+                if skip_until_content and not stripped:
+                    continue
+                
+                # Once we find content, stop skipping
+                if skip_until_content and stripped:
+                    skip_until_content = False
+                
+                # Add the line if we're not skipping
+                if not skip_until_content:
+                    cleaned_lines.append(line)
+            
+            cleaned_individual_flow = "\n".join(cleaned_lines)
+            
+            # Add the thread-specific header and cleaned content
+            combined_flow += f"Thread {i}: {flow_data['thread_subject']}\n"
+            combined_flow += "-" * 50 + "\n\n"
+            combined_flow += cleaned_individual_flow + "\n\n"
+            combined_flow += "-" * 50 + "\n\n"
+        
+        return {
+            "meeting_flow": combined_flow,
+            "product_name": product_name or "Multiple Products",
+            "product_domain": product_domain or "general products",
+            "individual_flows": processed_irrelevant_meeting_flows
+        }
+
+    # Create a meeting flow task for single/relevant threads
     meeting_flow_agent = get_agents().meeting_flow_writer()
     meeting_task_desc = (
         "You are generating a 'Meeting Flow Dossier' to help prepare for an upcoming meeting based on email discussions.\n\n"
@@ -1861,11 +2097,12 @@ Thread {i}: {thread.get('subject', 'N/A')}
         "- Extract unresolved issues, pending decisions, and action items from emails\n"
         "- Create a practical meeting agenda based on email discussions\n"
         "- Look for any mentioned meeting dates, times, or scheduling information in the emails\n"
-        "- Suggest meeting process improvements based on email communication patterns\n\n"
+        "- Suggest meeting process improvements based on email communication patterns\n"
+        "- CRITICAL: The 'Meeting Date and Time' section should ONLY contain actual date/time information, NOT meeting objectives or summary content\n\n"
         "Return exactly this structure in PLAIN TEXT format:\n\n"
         "Meeting Flow Dossier\n\n"
         "Meeting Date and Time\n"
-        "- [Extract any mentioned meeting date, time, or scheduling information from the emails. If no specific date/time is mentioned, omit this entire section]\n\n"
+        "[Extract ONLY actual meeting date, time, or scheduling information from the emails. Examples: 'Tuesday, August 5th, at 11:00 AM PST', 'Next Monday at 2 PM', 'Google Meet call on Friday'. If no specific date/time is mentioned, omit this entire section. DO NOT include meeting objectives or summary content here.]\n\n"
         "Meeting Objectives\n"
         "- [Specific objectives for the upcoming meeting based on email discussions]\n\n"
         "Meeting Context\n"
@@ -1976,7 +2213,67 @@ Meeting Process Improvements
     
     # Clean the output to ensure plain text formatting
     flow_text = clean_markdown_formatting(flow_text)
-
+    
+    # Post-process to fix "Meeting Date and Time" section if it contains incorrect content
+    def fix_meeting_date_time_section(text):
+        """Fix the Meeting Date and Time section if it contains objectives/summary instead of actual date/time"""
+        lines = text.split('\n')
+        fixed_lines = []
+        in_date_time_section = False
+        date_time_section_fixed = False
+        
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            
+            # Check if we're entering the Meeting Date and Time section
+            if stripped == "Meeting Date and Time":
+                in_date_time_section = True
+                fixed_lines.append(line)
+                continue
+            
+            # If we're in the date/time section, check if the next line contains objectives/summary content
+            if in_date_time_section and not date_time_section_fixed:
+                # Look for common objective/summary indicators
+                if any(indicator in stripped.lower() for indicator in [
+                    'objective', 'summary', 'plan', 'conduct', 'walkthrough', 'demonstration',
+                    'clarify', 'review', 'discuss', 'align', 'stakeholders', 'next steps'
+                ]):
+                    # This line contains objectives/summary content, not date/time
+                    # Remove the entire Meeting Date and Time section
+                    # Go back and remove the "Meeting Date and Time" header
+                    fixed_lines.pop()  # Remove the "Meeting Date and Time" header
+                    # Skip this line and continue until we find the next section
+                    in_date_time_section = False
+                    date_time_section_fixed = True
+                    continue
+                elif stripped and not stripped.startswith('-') and not stripped.startswith('•'):
+                    # This might be actual date/time content, keep it
+                    fixed_lines.append(line)
+                    in_date_time_section = False
+                    date_time_section_fixed = True
+                    continue
+                elif not stripped:
+                    # Empty line, keep it
+                    fixed_lines.append(line)
+                    continue
+                else:
+                    # This might be actual date/time content, keep it
+                    fixed_lines.append(line)
+                    in_date_time_section = False
+                    date_time_section_fixed = True
+                    continue
+            
+            # If we've fixed the date/time section, continue normally
+            if date_time_section_fixed:
+                in_date_time_section = False
+            
+            # Add the line normally
+            fixed_lines.append(line)
+        
+        return '\n'.join(fixed_lines)
+    
+    # Apply the fix
+    flow_text = fix_meeting_date_time_section(flow_text)
 
     return {
         "meeting_flow": flow_text,
@@ -2230,8 +2527,7 @@ def api_find_threads():
             start_date=data.get('start_date'),
             end_date=data.get('end_date'),
             keyword=data.get('keyword'),
-            from_email=data.get('from_email'),
-            query=data.get('query')
+            from_email=data.get('from_email')
         )
         print(f"Found {len(threads)} threads")  # Debug
         return jsonify(threads)
@@ -2291,26 +2587,54 @@ def api_process_threads_metadata():
             return jsonify({'error': str(ge), 'code': 'GMAIL_NOT_CONFIGURED'}), 400
         
         result = process_threads_metadata_only(thread_ids)
+        if result is None:
+            return jsonify({'error': 'Failed to process threads metadata'}), 500
+        
         return jsonify(result)
 
     except Exception as e:
+        print(f"[api_process_threads_metadata] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/analyze_multiple_threads", methods=["POST"])
 @require_auth
 def api_analyze_multiple_threads():
     try:
+        print(f"[api_analyze_multiple_threads] Starting request processing")
         data = request.get_json()
         thread_ids = data.get('thread_ids', [])
         if not thread_ids:
-                return jsonify({'error': 'thread_ids array is required'}), 400
+            print(f"[api_analyze_multiple_threads] No thread_ids provided")
+            return jsonify({'error': 'thread_ids array is required'}), 400
+        
+        print(f"[api_analyze_multiple_threads] Processing {len(thread_ids)} threads: {thread_ids}")
+        
         try:
             ensure_gmail_service()
+            print(f"[api_analyze_multiple_threads] Gmail service verified")
         except Exception as ge:
+            print(f"[api_analyze_multiple_threads] Gmail service error: {ge}")
             return jsonify({'error': str(ge), 'code': 'GMAIL_NOT_CONFIGURED'}), 400
+        
+        print(f"[api_analyze_multiple_threads] Calling analyze_multiple_threads...")
         result = analyze_multiple_threads(thread_ids)
+        
+        if result is None:
+            print(f"[api_analyze_multiple_threads] analyze_multiple_threads returned None")
+            return jsonify({'error': 'Analysis returned no result'}), 500
+        
+        if isinstance(result, dict) and "error" in result:
+            print(f"[api_analyze_multiple_threads] analyze_multiple_threads returned error: {result['error']}")
+            return jsonify(result), 500
+        
+        print(f"[api_analyze_multiple_threads] Successfully completed analysis")
         return jsonify(result)
     except Exception as e:
+        print(f"[api_analyze_multiple_threads] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/generate_meeting_dossier", methods=["POST"])
@@ -2570,10 +2894,10 @@ def extract_client_name_from_domains(messages, gmail_service=None):
         gmail_service: Gmail service object to get user profile
     
     Returns:
-        list: List of client names derived from domains, or ["Unknown Client"] if no valid domain found
+        list: List of client names derived from domains, or empty list if no valid domain found
     """
     if not messages or len(messages) == 0:
-        return ["Unknown Client"]
+        return []
     
     # Get Gmail user's email to identify their domain
     gmail_user_domain = None
@@ -2628,7 +2952,12 @@ def extract_client_name_from_domains(messages, gmail_service=None):
     
     # Filter out Gmail user's domain
     if gmail_user_domain:
-        gmail_main_domain = gmail_user_domain.split(".")[0] if "." in gmail_user_domain else gmail_user_domain
+        # Use the same logic as extracting domains from emails - take main domain part before the last dot
+        gmail_domain_parts = gmail_user_domain.split(".")
+        if len(gmail_domain_parts) >= 2:
+            gmail_main_domain = ".".join(gmail_domain_parts[:-1])
+        else:
+            gmail_main_domain = gmail_user_domain
         all_domains.discard(gmail_main_domain)
         print(f"[extract_client_name_from_domains] Filtered out Gmail user domain: {gmail_main_domain}")
     
@@ -2643,7 +2972,7 @@ def extract_client_name_from_domains(messages, gmail_service=None):
             print(f"[extract_client_name_from_domains] Converted domain '{domain}' to client name: '{client_name}'")
     
     if not client_names:
-        client_names = ["Unknown Client"]
+        client_names = []  # Return empty list instead of ["Unknown Client"]
     
     print(f"[extract_client_name_from_domains] Returning client names: {client_names}")
     return client_names

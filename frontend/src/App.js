@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled, { keyframes } from 'styled-components';
-import { Search, Mail, FileText, Calendar, User, Filter, Sparkles, AlertCircle } from 'lucide-react';
+import { Search, Mail, FileText, Calendar, User, Sparkles, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import DatePicker from 'react-datepicker';
@@ -601,6 +601,35 @@ const ClientSelector = styled.div`
     color: var(--primary-700);
     font-style: italic;
   }
+  
+  .custom-client-input {
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    background: var(--gray-50);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--gray-200);
+    
+    .client-name-input {
+      width: 100%;
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--gray-300);
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+      color: var(--gray-700);
+      background: white;
+      transition: all var(--transition-fast);
+      
+      &:focus {
+        outline: none;
+        border-color: var(--primary-400);
+        box-shadow: 0 0 0 3px var(--primary-100);
+      }
+      
+      &::placeholder {
+        color: var(--gray-400);
+      }
+    }
+  }
 `;
 
 const TabbedDossierContainer = styled.div`
@@ -688,7 +717,6 @@ function AuthenticatedApp() {
   const [activeEndDateRange, setActiveEndDateRange] = useState('');
   const [keyword, setKeyword] = useState('');
   const [senderEmail, setSenderEmail] = useState('');
-  const [advancedQuery, setAdvancedQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
@@ -708,6 +736,8 @@ function AuthenticatedApp() {
   const [clientValidation, setClientValidation] = useState({ valid: false, client_name: '', reason: '' });
   const [selectedClientName, setSelectedClientName] = useState('');
   const [availableClientNames, setAvailableClientNames] = useState([]);
+  const [customClientName, setCustomClientName] = useState('');
+  const [showCustomClientInput, setShowCustomClientInput] = useState(false);
   const [activeDossierTab, setActiveDossierTab] = useState('agenda');
 
   const handleSearch = async () => {
@@ -727,9 +757,9 @@ function AuthenticatedApp() {
     setSelectedClientName('');
     setAvailableClientNames([]);
 
-    // Make keyword compulsory
-    if (!keyword.trim()) {
-      setError('Keyword is required.');
+    // Make either keyword or sender email compulsory
+    if (!keyword.trim() && !senderEmail.trim()) {
+      setError('Either keyword or sender email is required.');
       setKeywordError(true);
       setIsLoading(false);
       return;
@@ -753,8 +783,7 @@ function AuthenticatedApp() {
         start_date: format(startDate, 'yyyy/MM/dd'),
         end_date: format(endDate, 'yyyy/MM/dd'),
         keyword: keyword || null,
-        from_email: senderEmail || null,
-        query: advancedQuery || null
+        from_email: senderEmail || null
       });
       
       setSearchResults(response.data);
@@ -819,7 +848,7 @@ function AuthenticatedApp() {
     }
   };
 
-  const handleGenerateTillDateAgenda = async () => {
+  const handleGeneratePastSummary = async () => {
     if (!processedMetadata) return;
     
     setIsAnalyzing(true);
@@ -841,10 +870,10 @@ function AuthenticatedApp() {
       }
       
       setActiveDossierTab('agenda'); // Auto-switch to agenda tab
-      setWarning('Till Date Agenda generated successfully.');
+      setWarning('Past Summary generated successfully.');
     } catch (error) {
-      console.error('Error generating till date agenda:', error);
-      setError('An error occurred while generating till date agenda. Please try again.');
+      console.error('Error generating past summary:', error);
+      setError('An error occurred while generating past summary. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -857,14 +886,15 @@ function AuthenticatedApp() {
     setError('');
     
     try {
-      // If we don't have analysis results, generate them first
+      // If we don't have analysis results, generate them first but don't set them in state
       let analysisData = analysisResults;
       if (!analysisData) {
         const analysisResponse = await axios.post(buildApiUrl('/api/analyze_multiple_threads'), {
           thread_ids: processedMetadata.processed_thread_ids
         });
         analysisData = analysisResponse.data;
-        setAnalysisResults(analysisData);
+        // Don't set analysis results to avoid triggering Past Summary display
+        // setAnalysisResults(analysisData);
       }
       
       // Generate meeting flow using analysis data
@@ -886,26 +916,33 @@ function AuthenticatedApp() {
   const handleGenerateClientDossierFromMetadata = async () => {
     if (!processedMetadata) return;
     
-    // Try multiple sources for client name
+    // Determine the client name to use
     let clientName = 'Unknown Client';
     
-    // 1. Check if we have analysis results with structured client name
-    if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+    // If custom input is selected and has a value, use it
+    if (showCustomClientInput && customClientName.trim()) {
+      clientName = customClientName.trim();
+    }
+    // Otherwise use the selected client name if available
+    else if (selectedClientName && selectedClientName !== 'custom') {
+      clientName = selectedClientName;
+    }
+    // If no selected client name, try to get from analysis results
+    else if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
       const analysisClientName = analysisResults.structured_analysis.client_name;
       if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
         clientName = analysisClientName;
       }
     }
-    
-    // 2. Fallback to metadata available client names
-    if (clientName === 'Unknown Client' && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
+    // Fallback to metadata available client names
+    else if (processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
       const metadataClientName = processedMetadata.available_client_names[0];
       if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
         clientName = metadataClientName;
       }
     }
     
-    if (clientName === 'Unknown Client') {
+    if (!clientName || clientName === 'Unknown Client') {
       setError('No client name found in the processed threads. Cannot generate client dossier.');
       return;
     }
@@ -1099,7 +1136,6 @@ function AuthenticatedApp() {
                 onChange={(e) => { setKeyword(e.target.value); setKeywordError(false); }}
                 placeholder="e.g., invoice, roadmap, meeting"
                 className={keywordError ? 'error' : ''}
-                required
               />
             </FormGroup>
             
@@ -1107,27 +1143,18 @@ function AuthenticatedApp() {
               <Label>
                 <User size={16} />
                 Sender Email
+                <RequiredIndicator>*</RequiredIndicator>
               </Label>
               <Input
                 type="email"
                 value={senderEmail}
                 onChange={(e) => setSenderEmail(e.target.value)}
                 placeholder="someone@company.com"
+                className={keywordError ? 'error' : ''}
               />
             </FormGroup>
             
-            <FormGroup>
-              <Label>
-                <Filter size={16} />
-                Advanced Query
-              </Label>
-              <Input
-                type="text"
-                value={advancedQuery}
-                onChange={(e) => setAdvancedQuery(e.target.value)}
-                placeholder='subject:"invoice" has:attachment'
-              />
-            </FormGroup>
+
           </FiltersRow>
           
           <SearchButton 
@@ -1191,7 +1218,7 @@ function AuthenticatedApp() {
                   title="Shows chronological email summaries, extracted meeting agenda items, participants, dates, and final conclusions"
                 >
                   <FileText size={16} />
-                  Till Date Agenda
+                  Past Summary
                 </TabButton>
               )}
               {meetingDossier && (
@@ -1243,6 +1270,7 @@ function AuthenticatedApp() {
                       ? analysisResults.product_domain 
                       : (processedMetadata?.product_domain !== 'general product' ? processedMetadata?.product_domain : null)
                   }
+                  relevancyAnalysis={analysisResults.relevancy_analysis}
                 />
               )}
 
@@ -1272,189 +1300,269 @@ function AuthenticatedApp() {
           </TabbedDossierContainer>
         )}
 
-        {/* Client Name Selection */}
-        {analysisResults && availableClientNames.length > 1 && (
-          <ClientSelector>
-            <h4>Multiple Client Names Found - Please Select One:</h4>
-            <div className="client-options">
-              {availableClientNames.map((clientName, index) => (
-                <label 
-                  key={index} 
-                  className={`client-option ${selectedClientName === clientName ? 'selected' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="clientName"
-                    value={clientName}
-                    checked={selectedClientName === clientName}
-                    onChange={(e) => setSelectedClientName(e.target.value)}
-                  />
-                  <span className="client-name">{clientName}</span>
-                </label>
-              ))}
-            </div>
-            {selectedClientName && (
-              <div className="selected-info">
-                Selected: <strong>{selectedClientName}</strong>
-              </div>
-            )}
-          </ClientSelector>
-        )}
 
 
 
 
-        {selectedThreads.length > 0 && !processedMetadata && (
-          <ActionsBar>
-            <Button 
-              className={`primary ${isProcessing ? 'loading' : ''}`}
-              onClick={handleProcessThreads} 
-              disabled={isProcessing}
-              title="Extracts participant info, dates, subjects, and client names from selected threads - prepares data for analysis"
-            >
-              {!isProcessing && <Sparkles size={18} />}
-              {isProcessing ? 'Processing...' : `Process Threads (${selectedThreads.length})`}
-            </Button>
-            <Button 
-              className="secondary"
-              onClick={() => setSelectedThreads([])} 
-              disabled={isProcessing}
-              title="Clears your current thread selection - lets you choose different emails"
-            >
-              Clear Selection
-            </Button>
-          </ActionsBar>
-        )}
+
+
 
         {/* Three Option Buttons - Show after processing */}
         {processedMetadata && (
-          <ButtonGrid className="full-width">
-            <Button 
-              className={`primary ${isAnalyzing ? 'loading' : ''}`}
-              onClick={handleGenerateTillDateAgenda} 
-              disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
-              title="Produces detailed analysis with email summaries, meeting agenda items, participant list, timeline, and actionable conclusions"
-            >
-              {!isAnalyzing && <FileText size={18} />}
-              {isAnalyzing ? 'Generating...' : '1. Till Date Agenda'}
-            </Button>
-            
-            <Button 
-              className={`primary ${isGeneratingMeeting ? 'loading' : ''}`}
-              onClick={handleGenerateMeetingFlow} 
-              disabled={isGeneratingMeeting || isAnalyzing || isGeneratingClient}
-              title="Creates a professional meeting document with structured flow, key decisions, blockers, next steps, and responsible parties"
-            >
-              {!isGeneratingMeeting && <Calendar size={18} />}
-              {isGeneratingMeeting ? 'Generating...' : '2. Meeting Flow Dossier'}
-            </Button>
-            
-            <Button 
-              className={`primary ${isGeneratingClient ? 'loading' : ''}`}
-              onClick={handleGenerateClientDossierFromMetadata} 
-              disabled={(() => {
-                // Always disabled during operations
-                if (isGeneratingClient || isAnalyzing || isGeneratingMeeting) {
-                  return true;
-                }
-                
-                // Check if we have a valid client name from either source
-                let hasValidClient = false;
-                
-                // Check analysis results first (most reliable)
-                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
-                  const analysisClientName = analysisResults.structured_analysis.client_name;
-                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
-                    hasValidClient = true;
+          <>
+            <ButtonGrid>
+              <Button 
+                className={`primary ${isAnalyzing ? 'loading' : ''}`}
+                onClick={handleGeneratePastSummary} 
+                disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+                title="Produces detailed analysis with email summaries, meeting agenda items, participant list, timeline, and actionable conclusions"
+              >
+                {!isAnalyzing && <FileText size={18} />}
+                {isAnalyzing ? 'Generating...' : '1. Past Summary'}
+              </Button>
+              
+              <Button 
+                className={`primary ${isGeneratingMeeting ? 'loading' : ''}`}
+                onClick={handleGenerateMeetingFlow} 
+                disabled={isGeneratingMeeting || isAnalyzing || isGeneratingClient}
+                title="Creates a professional meeting document with structured flow, key decisions, blockers, next steps, and responsible parties"
+              >
+                {!isGeneratingMeeting && <Calendar size={18} />}
+                {isGeneratingMeeting ? 'Generating...' : '2. Meeting Flow Dossier'}
+              </Button>
+              
+              <Button 
+                className={`primary ${isGeneratingClient ? 'loading' : ''}`}
+                onClick={handleGenerateClientDossierFromMetadata} 
+                disabled={isGeneratingClient || isAnalyzing || isGeneratingMeeting}
+                title={(() => {
+                  // Get client name for display
+                  let clientName = null;
+                  
+                  // Check custom client name first
+                  if (showCustomClientInput && customClientName.trim()) {
+                    clientName = customClientName.trim();
                   }
-                }
-                
-                // Check metadata if no analysis client found
-                if (!hasValidClient && processedMetadata && processedMetadata.available_client_names) {
-                  const metadataClientNames = processedMetadata.available_client_names;
-                  if (metadataClientNames.length > 0 && metadataClientNames[0].toLowerCase() !== 'unknown client') {
-                    hasValidClient = true;
+                  // Check selected client name
+                  else if (selectedClientName && selectedClientName !== 'custom') {
+                    clientName = selectedClientName;
                   }
-                }
-                
-                return !hasValidClient;
-              })()}
-              title={(() => {
-                // Get available client name for display
-                let availableClientName = null;
-                
-                // First check analysis results (most reliable after analysis is done)
-                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
-                  const analysisClientName = analysisResults.structured_analysis.client_name;
-                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
-                    availableClientName = analysisClientName;
+                  // Check analysis results
+                  else if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
+                    const analysisClientName = analysisResults.structured_analysis.client_name;
+                    if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
+                      clientName = analysisClientName;
+                    }
                   }
-                }
-                
-                // Fallback to metadata (available after processing but less reliable)
-                if (!availableClientName && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
-                  const metadataClientName = processedMetadata.available_client_names[0];
-                  if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
-                    availableClientName = metadataClientName;
+                  // Check metadata
+                  else if (processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
+                    const metadataClientName = processedMetadata.available_client_names[0];
+                    if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
+                      clientName = metadataClientName;
+                    }
                   }
-                }
-                
-                if (availableClientName) {
-                  return `Generate dossier for ${availableClientName}`;
-                } else if (analysisResults) {
-                  return 'No client name found in analysis';
-                } else {
-                  return 'Generate analysis first to identify client';
-                }
-              })()}
-            >
-              {!isGeneratingClient && <User size={18} />}
-              {isGeneratingClient ? 'Generating...' : (() => {
-                // Get available client name for button text
-                let availableClientName = null;
-                
-                // First check analysis results (most reliable after analysis is done)
-                if (analysisResults && analysisResults.structured_analysis && analysisResults.structured_analysis.client_name) {
-                  const analysisClientName = analysisResults.structured_analysis.client_name;
-                  if (analysisClientName && analysisClientName.toLowerCase() !== 'unknown client') {
-                    availableClientName = analysisClientName;
+                  
+                  if (clientName) {
+                    return `Generate dossier for ${clientName}`;
+                  } else if (analysisResults) {
+                    return 'No client name found in analysis';
+                  } else {
+                    return 'Generate analysis first to identify client';
                   }
-                }
+                })()}
+              >
+                {!isGeneratingClient && <User size={18} />}
+                {isGeneratingClient ? 'Generating...' : '3. Client Dossier'}
+              </Button>
+            </ButtonGrid>
+
+            {/* Client Selection Options */}
+            <div style={{ 
+              width: '100%', 
+              maxWidth: '900px', 
+              marginTop: 'var(--space-6)',
+              padding: 'var(--space-6)',
+              background: 'white',
+              borderRadius: 'var(--radius-xl)',
+              border: '1px solid var(--gray-200)',
+              boxShadow: 'var(--shadow-md)'
+            }}>
+              <h4 style={{ 
+                margin: '0 0 var(--space-4) 0', 
+                color: 'var(--gray-800)', 
+                fontSize: '1.125rem', 
+                fontWeight: '600' 
+              }}>
+                Select Client for Dossier:
+              </h4>
+              
+              <div style={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                gap: 'var(--space-3)' 
+              }}>
+                {/* Domain-specific client options */}
+                {processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0 && (
+                  <>
+                    {processedMetadata.available_client_names.map((clientName, index) => (
+                      <label 
+                        key={index} 
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: 'var(--space-3)', 
+                          padding: 'var(--space-3) var(--space-4)', 
+                          borderRadius: 'var(--radius-md)', 
+                          cursor: 'pointer', 
+                          transition: 'all var(--transition-fast)', 
+                          border: '1px solid var(--gray-200)',
+                          backgroundColor: selectedClientName === clientName ? 'var(--primary-50)' : 'transparent',
+                          borderColor: selectedClientName === clientName ? 'var(--primary-200)' : 'var(--gray-200)'
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="clientName"
+                          value={clientName}
+                          checked={selectedClientName === clientName}
+                          onChange={(e) => {
+                            setSelectedClientName(e.target.value);
+                            setShowCustomClientInput(false);
+                          }}
+                          style={{ margin: 0, accentColor: 'var(--primary-500)' }}
+                        />
+                        <span style={{ 
+                          fontSize: '0.875rem', 
+                          color: selectedClientName === clientName ? 'var(--primary-800)' : 'var(--gray-700)',
+                          fontWeight: selectedClientName === clientName ? '600' : '400'
+                        }}>
+                          {clientName}
+                        </span>
+                      </label>
+                    ))}
+                  </>
+                )}
                 
-                // Fallback to metadata (available after processing but less reliable)
-                if (!availableClientName && processedMetadata.available_client_names && processedMetadata.available_client_names.length > 0) {
-                  const metadataClientName = processedMetadata.available_client_names[0];
-                  if (metadataClientName && metadataClientName.toLowerCase() !== 'unknown client') {
-                    availableClientName = metadataClientName;
-                  }
-                }
-                
-                if (availableClientName) {
-                  return `3. Client Dossier (${availableClientName})`;
-                } else if (analysisResults) {
-                  return '3. Client Dossier (No Client Found)';
-                } else {
-                  return '3. Client Dossier (Generate Analysis First)';
-                }
-              })()}
-            </Button>
-            
-            <Button 
-              className="secondary"
-              onClick={() => {
-                setProcessedMetadata(null);
-                setSelectedThreads([]);
-                setAnalysisResults(null);
-                setMeetingDossier(null);
-                setClientDossier(null);
-                setActiveDossierTab('agenda'); // Reset to default tab
-              }}
-              disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
-              title="Resets everything - clears all analysis results and dossiers so you can start over with new emails"
-            >
-              Start Over
-            </Button>
-          </ButtonGrid>
+                {/* Custom client name option */}
+                <label style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 'var(--space-3)', 
+                  padding: 'var(--space-3) var(--space-4)', 
+                  borderRadius: 'var(--radius-md)', 
+                  cursor: 'pointer', 
+                  transition: 'all var(--transition-fast)', 
+                  border: '1px solid var(--gray-200)',
+                  backgroundColor: showCustomClientInput ? 'var(--primary-50)' : 'transparent',
+                  borderColor: showCustomClientInput ? 'var(--primary-200)' : 'var(--gray-200)'
+                }}>
+                  <input
+                    type="radio"
+                    name="clientName"
+                    value="custom"
+                    checked={showCustomClientInput}
+                    onChange={(e) => {
+                      setShowCustomClientInput(true);
+                      setSelectedClientName('custom');
+                    }}
+                    style={{ margin: 0, accentColor: 'var(--primary-500)' }}
+                  />
+                  <span style={{ 
+                    fontSize: '0.875rem', 
+                    color: showCustomClientInput ? 'var(--primary-800)' : 'var(--gray-700)',
+                    fontWeight: showCustomClientInput ? '600' : '400'
+                  }}>
+                    Other (Custom)
+                  </span>
+                </label>
+              </div>
+              
+              {/* Custom client name input */}
+              {showCustomClientInput && (
+                <div style={{ 
+                  marginTop: 'var(--space-3)', 
+                  padding: 'var(--space-3)', 
+                  background: 'var(--gray-50)', 
+                  borderRadius: 'var(--radius-md)', 
+                  border: '1px solid var(--gray-200)' 
+                }}>
+                  <input
+                    type="text"
+                    placeholder="Enter company name..."
+                    value={customClientName}
+                    onChange={(e) => setCustomClientName(e.target.value)}
+                    style={{ 
+                      width: '100%', 
+                      padding: 'var(--space-2) var(--space-3)', 
+                      border: '1px solid var(--gray-300)', 
+                      borderRadius: 'var(--radius-sm)', 
+                      fontSize: '0.875rem', 
+                      color: 'var(--gray-700)', 
+                      background: 'white', 
+                      transition: 'all var(--transition-fast)' 
+                    }}
+                  />
+                </div>
+              )}
+              
+              {/* Selected client info */}
+              {selectedClientName && !showCustomClientInput && (
+                <div style={{ 
+                  marginTop: 'var(--space-4)', 
+                  padding: 'var(--space-3)', 
+                  background: 'var(--primary-50)', 
+                  borderRadius: 'var(--radius-md)', 
+                  fontSize: '0.75rem', 
+                  color: 'var(--primary-700)', 
+                  fontStyle: 'italic' 
+                }}>
+                  Selected: <strong>{selectedClientName}</strong>
+                </div>
+              )}
+              
+              {showCustomClientInput && customClientName && (
+                <div style={{ 
+                  marginTop: 'var(--space-4)', 
+                  padding: 'var(--space-3)', 
+                  background: 'var(--primary-50)', 
+                  borderRadius: 'var(--radius-md)', 
+                  fontSize: '0.75rem', 
+                  color: 'var(--primary-700)', 
+                  fontStyle: 'italic' 
+                }}>
+                  Custom Name: <strong>{customClientName}</strong>
+                </div>
+              )}
+            </div>
+
+            {/* Start Over Button */}
+            <div style={{ 
+              width: '100%', 
+              maxWidth: '900px', 
+              marginTop: 'var(--space-4)', 
+              display: 'flex', 
+              justifyContent: 'center' 
+            }}>
+              <Button 
+                className="secondary"
+                onClick={() => {
+                  setProcessedMetadata(null);
+                  setSelectedThreads([]);
+                  setAnalysisResults(null);
+                  setMeetingDossier(null);
+                  setClientDossier(null);
+                  setSelectedClientName('');
+                  setCustomClientName('');
+                  setShowCustomClientInput(false);
+                  setActiveDossierTab('agenda'); // Reset to default tab
+                }}
+                disabled={isAnalyzing || isGeneratingMeeting || isGeneratingClient}
+                title="Resets everything - clears all analysis results and dossiers so you can start over with new emails"
+              >
+                Start Over
+              </Button>
+            </div>
+          </>
         )}
       </MainContent>
     </AppContainer>

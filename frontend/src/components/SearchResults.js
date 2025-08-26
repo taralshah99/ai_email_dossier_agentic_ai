@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import styled, { keyframes } from 'styled-components';
-import { Check, Mail, ChevronDown, ChevronUp, User, Hash, Eye, EyeOff } from 'lucide-react';
+import { Check, Mail, ChevronDown, ChevronUp, User, Hash, Eye, EyeOff, Users, MessageSquare, Sparkles, XCircle, Loader2 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const fadeInUp = keyframes`
   from {
@@ -13,11 +14,21 @@ const fadeInUp = keyframes`
   }
 `;
 
+const spin = keyframes`
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+`;
+
 const ResultsContainer = styled.div`
   width: 100%;
   max-width: 900px;
   margin-top: var(--space-8);
   animation: ${fadeInUp} 0.6s ease-out;
+  padding-bottom: ${props => props.$hasSelectedThreads ? '120px' : '0'};
 `;
 
 const ResultsHeader = styled.div`
@@ -184,8 +195,6 @@ const Participant = styled.div`
   padding-left: 12px;
 `;
 
-
-
 const Snippet = styled.p`
   font-size: 13px;
   color: #aaa;
@@ -194,8 +203,6 @@ const Snippet = styled.p`
   overflow: hidden;
   text-overflow: ellipsis;
 `;
-
-
 
 const Controls = styled.div`
   display: flex;
@@ -277,7 +284,6 @@ const MetaItem = styled.div`
   }
 `;
 
-// Update Sender to extend MetaItem
 const SenderMeta = styled(MetaItem)`
   font-weight: 500;
 `;
@@ -322,7 +328,222 @@ const ActionButton = styled.button`
   }
 `;
 
+// New styled components for badges
+const BadgeContainer = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+`;
+
+const Badge = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: ${props => {
+    if (props.$isCurrentUser) {
+      return '#dcfce7'; /* Light green background */
+    }
+    switch (props.$type) {
+      case 'sender': return 'var(--primary-100)';
+      case 'cc': return 'var(--warning-100)';
+      case 'bcc': return 'var(--error-100)';
+      default: return 'var(--gray-100)';
+    }
+  }};
+  color: ${props => {
+    if (props.$isCurrentUser) {
+      return '#166534'; /* Dark green text */
+    }
+    switch (props.$type) {
+      case 'sender': return 'var(--primary-800)';
+      case 'cc': return 'var(--warning-800)';
+      case 'bcc': return 'var(--error-800)';
+      default: return 'var(--gray-700)';
+    }
+  }};
+  border: 1px solid ${props => {
+    if (props.$isCurrentUser) {
+      return '#bbf7d0'; /* Medium green border */
+    }
+    switch (props.$type) {
+      case 'sender': return 'var(--primary-200)';
+      case 'cc': return 'var(--warning-200)';
+      case 'bcc': return 'var(--error-200)';
+      default: return 'var(--gray-200)';
+    }
+  }};
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  
+  svg {
+    width: 12px;
+    height: 12px;
+  }
+`;
+
+const ParticipantsSection = styled.div`
+  margin-top: var(--space-3);
+`;
+
+const ParticipantsTitle = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: var(--space-2);
+  
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+`;
+
+// Sticky Process Button Container
+const StickyProcessContainer = styled.div`
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.8));
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--gray-200);
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  
+  @media (max-width: 640px) {
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+  }
+`;
+
+const ProcessButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-8);
+  background: var(--primary-500);
+  color: white;
+  border: none;
+  border-radius: var(--radius-xl);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-lg);
+  min-height: 56px;
+  
+  &:hover:not(:disabled) {
+    background: var(--primary-600);
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-xl);
+  }
+  
+  &:active:not(:disabled) {
+    transform: translateY(-1px);
+  }
+  
+  &:disabled {
+    background: var(--gray-400);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: var(--shadow-sm);
+  }
+  
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+  
+  .animate-spin {
+    animation: ${spin} 1s linear infinite;
+  }
+  
+  @media (max-width: 640px) {
+    width: 100%;
+    justify-content: center;
+    padding: var(--space-4) var(--space-6);
+    font-size: 0.95rem;
+  }
+`;
+
+const ClearButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  
+  &:hover:not(:disabled) {
+    background: var(--gray-50);
+    border-color: var(--gray-400);
+  }
+  
+  &:disabled {
+    background: var(--gray-100);
+    color: var(--gray-400);
+    border-color: var(--gray-200);
+    cursor: not-allowed;
+  }
+  
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  
+  @media (max-width: 640px) {
+    width: 100%;
+    justify-content: center;
+  }
+`;
+
+const SelectionInfo = styled.div`
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: 500;
+  
+  .count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    background: var(--primary-100);
+    color: var(--primary-800);
+    border-radius: var(--radius-md);
+    padding: 0 var(--space-2);
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  
+  @media (max-width: 640px) {
+    justify-content: center;
+  }
+`;
+
 function SearchResults({ results, selectedThreads, onThreadToggle, onProcessSelected, isLoading }) {
+  const { user } = useAuth();
   const [sortBy, setSortBy] = useState('subject');
   const [expanded, setExpanded] = useState({});
   const [showMetadata, setShowMetadata] = useState({});
@@ -379,51 +600,182 @@ function SearchResults({ results, selectedThreads, onThreadToggle, onProcessSele
     setShowMetadata(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const renderThreadMetadata = (thread) => {
-    // For now, we'll show basic info from the thread object
-    // Later this will be enhanced when we get metadata from the backend
+  // Extract participants from thread data
+  const getParticipants = (thread) => {
     const participants = [];
+    const seenEmails = new Set(); // Track seen emails to avoid duplicates
     
-    // Extract basic participant info from sender
-    if (thread.sender) {
-      participants.push({ email: thread.sender, role: 'sender' });
+    // Use the new participants data from backend if available
+    if (thread.participants) {
+      // Add sender
+      if (thread.participants.sender && Array.isArray(thread.participants.sender)) {
+        thread.participants.sender.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'sender', type: 'sender' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+      
+      // Add CC recipients
+      if (thread.participants.cc && Array.isArray(thread.participants.cc)) {
+        thread.participants.cc.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'cc', type: 'cc' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+      
+      // Add BCC recipients
+      if (thread.participants.bcc && Array.isArray(thread.participants.bcc)) {
+        thread.participants.bcc.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'bcc', type: 'bcc' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+      
+      // Add recipients
+      if (thread.participants.recipients && Array.isArray(thread.participants.recipients)) {
+        thread.participants.recipients.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'recipient', type: 'recipient' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+    } else {
+      // Fallback to old method if participants data is not available
+      if (thread.sender) {
+        const emailLower = thread.sender.toLowerCase();
+        if (!seenEmails.has(emailLower)) {
+          participants.push({ email: thread.sender, role: 'sender', type: 'sender' });
+          seenEmails.add(emailLower);
+        }
+      }
+      
+      if (thread.cc && Array.isArray(thread.cc)) {
+        thread.cc.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'cc', type: 'cc' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+      
+      if (thread.bcc && Array.isArray(thread.bcc)) {
+        thread.bcc.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'bcc', type: 'bcc' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
+      
+      if (thread.recipients && Array.isArray(thread.recipients)) {
+        thread.recipients.forEach(email => {
+          const emailLower = email.toLowerCase();
+          if (!seenEmails.has(emailLower)) {
+            participants.push({ email, role: 'recipient', type: 'recipient' });
+            seenEmails.add(emailLower);
+          }
+        });
+      }
     }
+    
+    // Mark current user in their appropriate role if they're already in the participants list
+    if (user && user.email) {
+      const userEmail = user.email.toLowerCase();
+      participants.forEach(participant => {
+        if (participant.email.toLowerCase() === userEmail) {
+          participant.isCurrentUser = true;
+        }
+      });
+    }
+    
+    return participants;
+  };
+
+  const renderThreadMetadata = (thread) => {
+    const participants = getParticipants(thread);
+    const mailCount = thread.message_count || thread.mail_count || 1; // Default to 1 if not available
+    
+    // Group participants by type
+    const senderParticipants = participants.filter(p => p.type === 'sender');
+    const ccParticipants = participants.filter(p => p.type === 'cc');
+    const bccParticipants = participants.filter(p => p.type === 'bcc');
+    const recipientParticipants = participants.filter(p => p.type === 'recipient');
 
     return (
       <MetadataContainer>
         <MetadataRow>
-          <MetadataLabel>Thread ID:</MetadataLabel>
-          <MetadataValue>{thread.id}</MetadataValue>
+          <MetadataLabel>Mail Count:</MetadataLabel>
+          <MetadataValue>{mailCount} email(s)</MetadataValue>
         </MetadataRow>
         <MetadataRow>
           <MetadataLabel>Subject:</MetadataLabel>
           <MetadataValue>{thread.subject || 'No Subject'}</MetadataValue>
         </MetadataRow>
-        {participants.length > 0 && (
-          <MetadataRow>
-            <MetadataLabel>Participants:</MetadataLabel>
-            <div>
-              <MetadataValue>{participants.length} participant(s)</MetadataValue>
-              <ParticipantsList>
-                {participants.map((participant, idx) => (
-                  <Participant key={idx}>
-                    • {participant.email} ({participant.role})
-                  </Participant>
-                ))}
-              </ParticipantsList>
-            </div>
-          </MetadataRow>
-        )}
-        <MetadataRow>
-          <MetadataLabel>Preview:</MetadataLabel>
-          <MetadataValue>{thread.body ? 'Content available' : 'No content preview'}</MetadataValue>
-        </MetadataRow>
+        
+        {/* Participants Section */}
+        <ParticipantsSection>
+          <ParticipantsTitle>
+            <Users size={14} />
+            Participants ({participants.length})
+          </ParticipantsTitle>
+          
+          <BadgeContainer>
+            {/* Sender Badges */}
+            {senderParticipants.map((participant, idx) => (
+              <Badge key={`sender-${idx}`} $type="sender" $isCurrentUser={participant.isCurrentUser}>
+                <User size={12} />
+                {participant.email}
+                {participant.isCurrentUser && ' (You)'}
+              </Badge>
+            ))}
+            
+            {/* CC Badges */}
+            {ccParticipants.map((participant, idx) => (
+              <Badge key={`cc-${idx}`} $type="cc" $isCurrentUser={participant.isCurrentUser}>
+                <Users size={12} />
+                {participant.email}
+                {participant.isCurrentUser && ' (You)'}
+              </Badge>
+            ))}
+            
+            {/* BCC Badges */}
+            {bccParticipants.map((participant, idx) => (
+              <Badge key={`bcc-${idx}`} $type="bcc" $isCurrentUser={participant.isCurrentUser}>
+                <Users size={12} />
+                {participant.email}
+                {participant.isCurrentUser && ' (You)'}
+              </Badge>
+            ))}
+            
+            {/* Recipient Badges */}
+            {recipientParticipants.map((participant, idx) => (
+              <Badge key={`recipient-${idx}`} $type="recipient" $isCurrentUser={participant.isCurrentUser}>
+                <User size={12} />
+                {participant.email}
+                {participant.isCurrentUser && ' (You)'}
+              </Badge>
+            ))}
+          </BadgeContainer>
+        </ParticipantsSection>
       </MetadataContainer>
     );
   };
 
   return (
-    <ResultsContainer>
+            <ResultsContainer $hasSelectedThreads={selectedThreads.length > 0}>
       <ResultsHeader>
         <ResultsCount>
           <Mail size={16} />
@@ -471,8 +823,8 @@ function SearchResults({ results, selectedThreads, onThreadToggle, onProcessSele
                   {thread.sender || 'Unknown Sender'}
                 </SenderMeta>
                 <MetaItem>
-                  <Hash size={14} />
-                  ID: {thread.id}
+                  <MessageSquare size={14} />
+                  {(thread.message_count || thread.mail_count || 1)} emails
                 </MetaItem>
               </ThreadMeta>
 
@@ -509,6 +861,27 @@ function SearchResults({ results, selectedThreads, onThreadToggle, onProcessSele
           </ThreadItem>
         ))}
       </ThreadList>
+      {selectedThreads.length > 0 && (
+        <StickyProcessContainer>
+          <SelectionInfo>
+            <Users size={16} />
+            <span className="count">{selectedThreads.length}</span>
+            {selectedThreads.length === 1 ? 'thread selected' : 'threads selected'}
+          </SelectionInfo>
+          <ProcessButton onClick={onProcessSelected} disabled={isLoading}>
+            {!isLoading && <Sparkles size={18} />}
+            {isLoading ? 'Processing...' : `Process Threads (${selectedThreads.length})`}
+            {isLoading && <Loader2 size={18} className="animate-spin" />}
+          </ProcessButton>
+          <ClearButton onClick={() => {
+            // Clear all selected threads
+            selectedThreads.forEach(id => onThreadToggle(id));
+          }} disabled={isLoading}>
+            <XCircle size={16} />
+            Clear Selection
+          </ClearButton>
+        </StickyProcessContainer>
+      )}
     </ResultsContainer>
   );
 }
