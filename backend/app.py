@@ -1436,23 +1436,24 @@ def analyze_thread_content(thread_id: str):
     task = Task(
         description=(
             "You are given a single email thread. Read every email carefully and produce a comprehensive, well-structured analysis.\n\n"
-            "Rules:\n"
+            "STRICT Rules:\n"
             "- Always return the sections below in the exact order and with the exact headings.\n"
             "- If the thread has only one email, do NOT write 'The first email says'. Write a direct summary instead.\n"
             "- Be specific. Use concrete details (who, what, when, where, why) from the thread.\n"
             "- If dates or times are ambiguous, infer the most likely time window and note uncertainty.\n"
             "- Expand the Final Conclusion into 3-6 detailed sentences covering outcomes, next steps, blockers, decisions, and owners.\n"
             "- Extract product information whenever present. If absent, return 'Unknown' and a plausible domain.\n"
-            "- Use bullet points for lists. Keep tone concise and professional.\n\n"
-            "Return exactly this template and fill it thoroughly:\n\n"
+            "- Use bullet points for lists. Keep tone concise and professional.\n"
+            "- CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text.\n\n"
+            "Return exactly this template and fill it thoroughly, OMITTING any sections with insufficient information:\n\n"
             "**Email Summaries:**\n"
-            "- [One bullet per email in chronological order. Include sender, intent, key facts, and explicit asks/decisions.]\n\n"
+            "- [One bullet per email in chronological order. Include sender, intent, key facts, and explicit asks/decisions. If no emails to summarize, OMIT THIS ENTIRE SECTION.]\n\n"
             "**Meeting Agenda:**\n"
-            "- [Bullet list of agenda items, discussion topics, action items, blockers, owners]\n\n"
+            "- [Bullet list of agenda items, discussion topics, action items, blockers, owners. If no agenda items can be identified, OMIT THIS ENTIRE SECTION.]\n\n"
             "**Meeting Date & Time:**\n"
-            "- [All explicit or implied dates/times with timezone if present; otherwise note 'unspecified']\n\n"
+            "- [All explicit or implied dates/times with timezone if present. If no dates/times are mentioned or can be inferred, OMIT THIS ENTIRE SECTION.]\n\n"
             "**Final Conclusion:**\n"
-            "- [3-6 sentences summarizing the outcome, context, decisions, stakeholders, next steps, and deadlines. Avoid 'first email says' phrasing.]\n\n"
+            "- [3-6 sentences summarizing the outcome, context, decisions, stakeholders, next steps, and deadlines. Avoid 'first email says' phrasing. If insufficient information for a conclusion, OMIT THIS ENTIRE SECTION.]\n\n"
             "**Client Name:** [If present; else 'Unknown Client']\n"
             "**Product Name:** [If present; else 'Unknown']\n"
             "**Product Domain:** [If present; else best-guess domain, e.g., 'SaaS', 'HR tech', 'payments']\n\n"
@@ -1884,6 +1885,310 @@ def analyze_multiple_threads(thread_ids: list):
         return {"error": f"Failed to create result object: {str(e)}"}
 
 
+def fix_meeting_date_time_section(text):
+    """Fix the Meeting Date and Time section if it contains objectives/summary instead of actual date/time"""
+    lines = text.split('\n')
+    fixed_lines = []
+    in_date_time_section = False
+    date_time_section_fixed = False
+    date_time_section_content = []
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Check if we're entering the Meeting Date and Time section
+        if stripped == "Meeting Date and Time":
+            in_date_time_section = True
+            date_time_section_content = []
+            fixed_lines.append(line)
+            continue
+        
+        # If we're in the date/time section, collect all content until we hit the next section
+        if in_date_time_section and not date_time_section_fixed:
+            # Check if we've hit the next section (another heading)
+            if stripped and not stripped.startswith('-') and not stripped.startswith('•') and not stripped.startswith('[') and stripped != "":
+                # Check if this looks like a section header (capitalized words, no punctuation at end)
+                if (stripped.isupper() or 
+                    (stripped[0].isupper() and not stripped.endswith('.') and not stripped.endswith(':') and 
+                     len(stripped.split()) <= 5 and not any(char in stripped for char in ['(', ')', ',', ';']))):
+                    # This is likely the next section, process the date/time section content
+                    in_date_time_section = False
+                    date_time_section_fixed = True
+                    
+                    # Analyze the collected content
+                    section_text = ' '.join(date_time_section_content).lower()
+                    
+                    # Check for objective/summary indicators
+                    objective_indicators = [
+                        'objective', 'summary', 'plan', 'conduct', 'walkthrough', 'demonstration',
+                        'clarify', 'review', 'discuss', 'align', 'stakeholders', 'next steps',
+                        'understand', 'understanding', 'structure', 'use cases', 'exports', 'tracker', 'data',
+                        'analyze', 'sample', 'safety', 'culture', 'sales', 'purpose', 'goal',
+                        'aim', 'intent', 'focus', 'scope', 'overview', 'background', 'context',
+                        'to ', 'for ', 'about ', 'regarding ', 'concerning ', 'through ', 'shared ',
+                        'detailed ', 'comprehensive ', 'thorough ', 'complete ', 'full ',
+                        'explore ', 'examine ', 'investigate ', 'study ', 'assess ', 'evaluate ',
+                        'identify ', 'determine ', 'establish ', 'define ', 'outline ', 'describe ',
+                        'explain ', 'present ', 'show ', 'demonstrate ', 'illustrate ', 'highlight ',
+                        'address ', 'resolve ', 'solve ', 'tackle ', 'handle ', 'manage ',
+                        'coordinate ', 'organize ', 'arrange ', 'schedule ', 'plan ', 'prepare ',
+                        'develop ', 'create ', 'build ', 'design ', 'implement ', 'execute ',
+                        'deliver ', 'provide ', 'offer ', 'supply ', 'give ', 'share ',
+                        'collaborate ', 'work ', 'partner ', 'team ', 'group ', 'committee ',
+                        'stakeholder', 'participant', 'member', 'attendee', 'contributor'
+                    ]
+                    
+                    has_objective_content = any(indicator in section_text for indicator in objective_indicators)
+                    
+                    # Additional check for objective-like sentence patterns
+                    objective_patterns = [
+                        r'\bto\s+\w+',  # "to clarify", "to review", etc.
+                        r'\bfor\s+\w+',  # "for discussion", "for review", etc.
+                        r'\bthrough\s+\w+',  # "through detailed walkthrough"
+                        r'\bby\s+\w+',  # "by analyzing", "by reviewing", etc.
+                        r'\bvia\s+\w+',  # "via demonstration", etc.
+                        r'\bwith\s+\w+',  # "with stakeholders", etc.
+                        r'\babout\s+\w+',  # "about data structure", etc.
+                        r'\bregarding\s+\w+',  # "regarding exports", etc.
+                        r'\bconcerning\s+\w+',  # "concerning tracker", etc.
+                        r'\bof\s+\w+\s+and\s+\w+',  # "of safety culture and sales tracker"
+                        r'\bunderstanding\s+of\s+\w+',  # "understanding of data"
+                        r'\bclarification\s+of\s+\w+',  # "clarification of structure"
+                        r'\breview\s+of\s+\w+',  # "review of exports"
+                        r'\banalysis\s+of\s+\w+',  # "analysis of data"
+                    ]
+                    
+                    has_objective_pattern = any(re.search(pattern, section_text, re.IGNORECASE) for pattern in objective_patterns)
+                    
+                    # Check for actual date/time patterns
+                    import re
+                    date_time_patterns = [
+                        r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',  # MM/DD/YYYY or DD/MM/YYYY
+                        r'\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b',    # YYYY/MM/DD
+                        r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b',  # Month DD, YYYY
+                        r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b',
+                        r'\b\d{1,2}:\d{2}\s*(?:am|pm)\b',      # HH:MM AM/PM
+                        r'\b\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.)\b',  # HH:MM A.M./P.M.
+                        r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',  # Day names
+                        r'\b(?:mon|tue|wed|thu|fri|sat|sun)\b',     # Abbreviated day names
+                        r'\b(?:pst|pdt|est|edt|cst|cdt|mst|mdt|utc|gmt)\b',  # Time zones
+                        r'\b(?:tomorrow|today|next week|this week|next month)\b',  # Relative dates
+                        r'\b(?:google meet|zoom|teams|skype|webex)\b',  # Meeting platforms
+                    ]
+                    
+                    has_date_time_content = any(re.search(pattern, section_text) for pattern in date_time_patterns)
+                    
+                    if (has_objective_content or has_objective_pattern) and not has_date_time_content:
+                        # Remove the entire Meeting Date and Time section
+                        fixed_lines.pop()  # Remove the "Meeting Date and Time" header
+                        # Don't add the collected content
+                    else:
+                        # Keep the content
+                        fixed_lines.extend(date_time_section_content)
+                    
+                    # Add the current line (next section header)
+                    fixed_lines.append(line)
+                    continue
+                else:
+                    # This is content within the date/time section
+                    date_time_section_content.append(line)
+                    continue
+            else:
+                # This is content within the date/time section
+                date_time_section_content.append(line)
+                continue
+        
+        # If we've fixed the date/time section, continue normally
+        if date_time_section_fixed:
+            in_date_time_section = False
+        
+        # Add the line normally
+        fixed_lines.append(line)
+    
+    # Handle case where date/time section is at the end of the document
+    if in_date_time_section and not date_time_section_fixed:
+        section_text = ' '.join(date_time_section_content).lower()
+        
+        # Check for objective/summary indicators
+        objective_indicators = [
+            'objective', 'summary', 'plan', 'conduct', 'walkthrough', 'demonstration',
+            'clarify', 'review', 'discuss', 'align', 'stakeholders', 'next steps',
+            'understand', 'understanding', 'structure', 'use cases', 'exports', 'tracker', 'data',
+            'analyze', 'sample', 'safety', 'culture', 'sales', 'purpose', 'goal',
+            'aim', 'intent', 'focus', 'scope', 'overview', 'background', 'context',
+            'to ', 'for ', 'about ', 'regarding ', 'concerning ', 'through ', 'shared ',
+            'detailed ', 'comprehensive ', 'thorough ', 'complete ', 'full ',
+            'explore ', 'examine ', 'investigate ', 'study ', 'assess ', 'evaluate ',
+            'identify ', 'determine ', 'establish ', 'define ', 'outline ', 'describe ',
+            'explain ', 'present ', 'show ', 'demonstrate ', 'illustrate ', 'highlight ',
+            'address ', 'resolve ', 'solve ', 'tackle ', 'handle ', 'manage ',
+            'coordinate ', 'organize ', 'arrange ', 'schedule ', 'plan ', 'prepare ',
+            'develop ', 'create ', 'build ', 'design ', 'implement ', 'execute ',
+            'deliver ', 'provide ', 'offer ', 'supply ', 'give ', 'share ',
+            'collaborate ', 'work ', 'partner ', 'team ', 'group ', 'committee ',
+            'stakeholder', 'participant', 'member', 'attendee', 'contributor'
+        ]
+        
+        has_objective_content = any(indicator in section_text for indicator in objective_indicators)
+        
+        # Check for actual date/time patterns
+        import re
+        date_time_patterns = [
+            r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',  # MM/DD/YYYY or DD/MM/YYYY
+            r'\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b',    # YYYY/MM/DD
+            r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b',  # Month DD, YYYY
+            r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b',
+            r'\b\d{1,2}:\d{2}\s*(?:am|pm)\b',      # HH:MM AM/PM
+            r'\b\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.)\b',  # HH:MM A.M./P.M.
+            r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',  # Day names
+            r'\b(?:mon|tue|wed|thu|fri|sat|sun)\b',     # Abbreviated day names
+            r'\b(?:pst|pdt|est|edt|cst|cdt|mst|mdt|utc|gmt)\b',  # Time zones
+            r'\b(?:tomorrow|today|next week|this week|next month)\b',  # Relative dates
+            r'\b(?:google meet|zoom|teams|skype|webex)\b',  # Meeting platforms
+        ]
+        
+        has_date_time_content = any(re.search(pattern, section_text) for pattern in date_time_patterns)
+        
+        if has_objective_content and not has_date_time_content:
+            # Remove the entire Meeting Date and Time section
+            fixed_lines.pop()  # Remove the "Meeting Date and Time" header
+            # Don't add the collected content
+        else:
+            # Keep the content
+            fixed_lines.extend(date_time_section_content)
+    
+    return '\n'.join(fixed_lines)
+
+
+def generate_single_thread_meeting_flow(analysis_result: dict):
+    """
+    Generate meeting flow for a single thread analysis result.
+    This avoids recursive calls to generate_meeting_flow_dossier.
+    """
+    print(f"[generate_single_thread_meeting_flow] Starting single thread meeting flow generation")
+    
+    try:
+        structured = analysis_result.get("structured_analysis")
+        raw = analysis_result.get("analysis")
+        thread_metadata = analysis_result.get("thread_metadata")
+        
+        if not structured:
+            print(f"[generate_single_thread_meeting_flow] No structured analysis found")
+            return {
+                "meeting_flow": "Meeting Flow Dossier\n\nNo structured analysis available for this thread.",
+                "product_name": "Unknown Product",
+                "product_domain": "general product"
+            }
+        
+        # Build source text for LLM
+        source_sections = []
+        if structured:
+            try:
+                source_sections.append("STRUCTURED ANALYSIS:\n" + json.dumps(structured, indent=2))
+            except Exception:
+                source_sections.append("STRUCTURED ANALYSIS (unserializable) provided")
+        if raw:
+            source_sections.append("RAW ANALYSIS:\n" + str(raw))
+        
+        source_text = "\n\n".join([s for s in source_sections if s]).strip() or "No analysis content provided."
+        print(f"[generate_single_thread_meeting_flow] Initial source text length: {len(source_text)} chars")
+        print(f"[generate_single_thread_meeting_flow] Source sections count: {len(source_sections)}")
+        print(f"[generate_single_thread_meeting_flow] Structured analysis keys: {list(structured.keys()) if structured else 'None'}")
+        
+        # Extract metadata for meeting flow
+        metadata_text = ""
+        if thread_metadata:
+            metadata_text = f"""
+THREAD METADATA:
+- Thread ID: {thread_metadata.get('thread_id', 'N/A')}
+- Subject: {thread_metadata.get('subject', 'N/A')}
+- Number of Emails in Thread: {thread_metadata.get('message_count', 0)}
+- First Email Date: {thread_metadata.get('first_email_date', 'N/A')}
+- Last Email Date: {thread_metadata.get('last_email_date', 'N/A')}
+"""
+        
+        # Prepare source text for LLM - METADATA FIRST, then analysis
+        if metadata_text:
+            source_text = metadata_text + "\n\n" + source_text
+            print(f"[generate_single_thread_meeting_flow] Metadata included in prompt ({len(metadata_text)} chars)")
+        
+        print(f"[generate_single_thread_meeting_flow] Final source text length: {len(source_text)} chars")
+        print(f"[generate_single_thread_meeting_flow] Source text starts with: {source_text[:100]}...")
+        
+        # Create a meeting flow task for single thread
+        meeting_flow_agent = get_agents().meeting_flow_writer()
+        meeting_task_desc = (
+            "You are generating a 'Meeting Flow Dossier' to help prepare for an upcoming meeting based on email discussions.\n\n"
+            "PURPOSE: This dossier should focus on MEETING PREPARATION - what needs to be discussed, decided, and accomplished in the meeting. This is NOT a historical summary but a forward-looking meeting preparation guide.\n\n"
+            "CRITICAL: Return CLEAN PLAIN TEXT only. Do NOT use markdown symbols like #, ##, *, or **. Do NOT use special characters like \\u2014 or \\u2019. Use simple dashes and apostrophes.\n\n"
+
+            "CONTENT REQUIREMENTS:\n"
+            "- Focus on FUTURE ACTIONS and meeting preparation, not past summaries\n"
+            "- Identify what needs to be DISCUSSED, DECIDED, or RESOLVED in the meeting\n"
+            "- Extract unresolved issues, pending decisions, and action items from emails\n"
+            "- Create a practical meeting agenda based on email discussions\n"
+            "- Look for any mentioned meeting dates, times, or scheduling information in the emails\n"
+            "- Suggest meeting process improvements based on email communication patterns\n"
+            "- CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text.\n\n"
+
+            "SOURCE DATA:\n" + source_text
+        )
+        
+        # Import CrewAI components when needed
+        from crewai import Task, Crew, Process
+        
+        task = Task(
+            description=meeting_task_desc,
+            expected_output="A comprehensive meeting flow dossier with all required sections, focusing on future actions and meeting preparation.",
+            agent=meeting_flow_agent
+        )
+        
+        print(f"[generate_single_thread_meeting_flow] Starting CrewAI analysis...")
+        print(f"[generate_single_thread_meeting_flow] Source text preview: {source_text[:500]}...")
+        crew = Crew(agents=[meeting_flow_agent], tasks=[task], process=Process.sequential)
+        
+        try:
+            meeting_flow_output = crew.kickoff()
+            print(f"[generate_single_thread_meeting_flow] CrewAI analysis completed successfully")
+            print(f"[generate_single_thread_meeting_flow] Output length: {len(str(meeting_flow_output))}")
+            print(f"[generate_single_thread_meeting_flow] Output preview: {str(meeting_flow_output)[:200]}...")
+            
+            # Post-process to fix any issues with Meeting Date and Time section
+            meeting_flow_output = fix_meeting_date_time_section(meeting_flow_output)
+            
+            # Extract product info
+            product_name = analysis_result.get("product_name", "Unknown Product")
+            product_domain = analysis_result.get("product_domain", "general product")
+            
+            return {
+                "meeting_flow": str(meeting_flow_output),
+                "product_name": product_name,
+                "product_domain": product_domain
+            }
+            
+        except Exception as e:
+            print(f"[generate_single_thread_meeting_flow] CrewAI analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Return fallback content with only available information
+            return {
+                "meeting_flow": f"Meeting Flow Dossier\n\nMeeting Context\nMeeting context extracted from email thread analysis.\n\nKey Discussion Points For Meeting\n- Key points for this thread\n\nProposed Meeting Agenda\n1. Review email thread content\n2. Discuss next steps based on analysis",
+                "product_name": analysis_result.get("product_name", "Unknown Product"),
+                "product_domain": analysis_result.get("product_domain", "general product")
+            }
+            
+    except Exception as e:
+        print(f"[generate_single_thread_meeting_flow] Error in function: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "meeting_flow": "Meeting Flow Dossier\n\nError generating meeting flow for this thread.",
+            "product_name": "Unknown Product",
+            "product_domain": "general product"
+        }
+
+
 def generate_meeting_flow_dossier(analysis_payload: dict):
     """
     Generate ONLY the meeting flow section from analysis data.
@@ -1914,15 +2219,17 @@ def generate_meeting_flow_dossier(analysis_payload: dict):
                 print(f"[generate_meeting_flow_dossier] Processing irrelevant thread {i+1}/{len(irrelevant_threads)}: {thread.get('subject', 'Unknown')}")
                 
                 # Process this thread individually using single thread analysis
+                print(f"[generate_meeting_flow_dossier] Calling analyze_thread_content for thread {thread['thread_id']}")
                 individual_result = analyze_thread_content(thread["thread_id"])
+                print(f"[generate_meeting_flow_dossier] Individual result keys: {list(individual_result.keys()) if individual_result else 'None'}")
+                print(f"[generate_meeting_flow_dossier] Individual result has structured_analysis: {'structured_analysis' in individual_result if individual_result else False}")
                 
                 if individual_result and "structured_analysis" in individual_result:
-                    # Generate meeting flow for this individual thread
-                    individual_meeting_result = generate_meeting_flow_dossier({
-                        "structured_analysis": individual_result["structured_analysis"],
-                        "raw_analysis": individual_result.get("raw_analysis"),
-                        "thread_metadata": individual_result.get("thread_metadata")
-                    })
+                    # Generate meeting flow for this individual thread using a direct approach
+                    # to avoid recursive calls to generate_meeting_flow_dossier
+                    print(f"[generate_meeting_flow_dossier] Calling generate_single_thread_meeting_flow for thread {i+1}")
+                    individual_meeting_result = generate_single_thread_meeting_flow(individual_result)
+                    print(f"[generate_meeting_flow_dossier] Individual meeting result keys: {list(individual_meeting_result.keys()) if individual_meeting_result else 'None'}")
                     
                     # Create a meeting flow entry for this thread
                     processed_flow = {
@@ -1934,8 +2241,11 @@ def generate_meeting_flow_dossier(analysis_payload: dict):
                     
                     processed_irrelevant_meeting_flows.append(processed_flow)
                     print(f"[generate_meeting_flow_dossier] Successfully processed meeting flow for thread {i+1}")
+                    print(f"[generate_meeting_flow_dossier] Thread {i+1} meeting flow length: {len(individual_meeting_result.get('meeting_flow', ''))}")
+                    print(f"[generate_meeting_flow_dossier] Thread {i+1} meeting flow preview: {individual_meeting_result.get('meeting_flow', '')[:200]}...")
                 else:
                     print(f"[generate_meeting_flow_dossier] Failed to get structured analysis for thread {i+1}")
+                    print(f"[generate_meeting_flow_dossier] Individual result keys: {list(individual_result.keys()) if individual_result else 'None'}")
                     
             except Exception as e:
                 print(f"[generate_meeting_flow_dossier] Error processing individual thread {i+1}: {e}")
@@ -2036,6 +2346,10 @@ Thread {i}: {thread.get('subject', 'N/A')}
     # If we have processed irrelevant threads, return a combined meeting flow
     if processed_irrelevant_meeting_flows:
         print(f"[generate_meeting_flow_dossier] Returning combined meeting flow for {len(processed_irrelevant_meeting_flows)} irrelevant threads")
+        for i, flow in enumerate(processed_irrelevant_meeting_flows):
+            print(f"[generate_meeting_flow_dossier] Thread {i+1} subject: {flow.get('thread_subject', 'Unknown')}")
+            print(f"[generate_meeting_flow_dossier] Thread {i+1} meeting flow length: {len(flow.get('meeting_flow', ''))}")
+            print(f"[generate_meeting_flow_dossier] Thread {i+1} meeting flow preview: {flow.get('meeting_flow', '')[:200]}...")
         
         combined_flow = "Meeting Flow Dossier - Multiple Threads\n\n"
         
@@ -2090,7 +2404,6 @@ Thread {i}: {thread.get('subject', 'N/A')}
         "You are generating a 'Meeting Flow Dossier' to help prepare for an upcoming meeting based on email discussions.\n\n"
         "PURPOSE: This dossier should focus on MEETING PREPARATION - what needs to be discussed, decided, and accomplished in the meeting. This is NOT a historical summary but a forward-looking meeting preparation guide.\n\n"
         "CRITICAL: Return CLEAN PLAIN TEXT only. Do NOT use markdown symbols like #, ##, *, or **. Do NOT use special characters like \\u2014 or \\u2019. Use simple dashes and apostrophes.\n\n"
-
         "CONTENT REQUIREMENTS:\n"
         "- Focus on FUTURE ACTIONS and meeting preparation, not past summaries\n"
         "- Identify what needs to be DISCUSSED, DECIDED, or RESOLVED in the meeting\n"
@@ -2098,11 +2411,11 @@ Thread {i}: {thread.get('subject', 'N/A')}
         "- Create a practical meeting agenda based on email discussions\n"
         "- Look for any mentioned meeting dates, times, or scheduling information in the emails\n"
         "- Suggest meeting process improvements based on email communication patterns\n"
-        "- CRITICAL: The 'Meeting Date and Time' section should ONLY contain actual date/time information, NOT meeting objectives or summary content\n\n"
+        "- CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text.\n\n"
         "Return exactly this structure in PLAIN TEXT format:\n\n"
         "Meeting Flow Dossier\n\n"
         "Meeting Date and Time\n"
-        "[Extract ONLY actual meeting date, time, or scheduling information from the emails. Examples: 'Tuesday, August 5th, at 11:00 AM PST', 'Next Monday at 2 PM', 'Google Meet call on Friday'. If no specific date/time is mentioned, omit this entire section. DO NOT include meeting objectives or summary content here.]\n\n"
+        "- [Extract any mentioned meeting date, time, or scheduling information from the emails. If no specific date/time is mentioned, omit this entire section]\n\n"
         "Meeting Objectives\n"
         "- [Specific objectives for the upcoming meeting based on email discussions]\n\n"
         "Meeting Context\n"
@@ -2143,11 +2456,8 @@ Thread {i}: {thread.get('subject', 'N/A')}
         flow_output = crew.kickoff()
     except Exception as e:
         print(f"[generate_meeting_flow_dossier] CrewAI execution error: {e}")
-        # Fallback: create a basic meeting flow structure
+        # Fallback: create a basic meeting flow structure with only available information
         flow_text = f"""Meeting Flow Dossier
-
-Meeting Objectives
-- Review meeting objectives from email content
 
 Meeting Context
 Meeting context extracted from email thread analysis.
@@ -2155,22 +2465,9 @@ Meeting context extracted from email thread analysis.
 Key Discussion Points for Meeting
 - Key points that need to be discussed in the meeting
 
-Decisions Required
-- Decisions that need to be made during the meeting
-
-Current Blockers to Address
-- Any blockers or issues that need resolution
-
 Proposed Meeting Agenda
-1. First agenda item
-2. Second agenda item
-3. Additional items as needed
-
-Next Steps & Owners (Post-Meeting)
-- Action items and their owners
-
-Meeting Process Improvements
-- Process improvement suggestions"""
+1. Review email thread content
+2. Discuss next steps based on analysis"""
         return {
             "meeting_flow": flow_text,
             "product_name": product_name or "Unknown Product",
@@ -2214,64 +2511,6 @@ Meeting Process Improvements
     # Clean the output to ensure plain text formatting
     flow_text = clean_markdown_formatting(flow_text)
     
-    # Post-process to fix "Meeting Date and Time" section if it contains incorrect content
-    def fix_meeting_date_time_section(text):
-        """Fix the Meeting Date and Time section if it contains objectives/summary instead of actual date/time"""
-        lines = text.split('\n')
-        fixed_lines = []
-        in_date_time_section = False
-        date_time_section_fixed = False
-        
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            
-            # Check if we're entering the Meeting Date and Time section
-            if stripped == "Meeting Date and Time":
-                in_date_time_section = True
-                fixed_lines.append(line)
-                continue
-            
-            # If we're in the date/time section, check if the next line contains objectives/summary content
-            if in_date_time_section and not date_time_section_fixed:
-                # Look for common objective/summary indicators
-                if any(indicator in stripped.lower() for indicator in [
-                    'objective', 'summary', 'plan', 'conduct', 'walkthrough', 'demonstration',
-                    'clarify', 'review', 'discuss', 'align', 'stakeholders', 'next steps'
-                ]):
-                    # This line contains objectives/summary content, not date/time
-                    # Remove the entire Meeting Date and Time section
-                    # Go back and remove the "Meeting Date and Time" header
-                    fixed_lines.pop()  # Remove the "Meeting Date and Time" header
-                    # Skip this line and continue until we find the next section
-                    in_date_time_section = False
-                    date_time_section_fixed = True
-                    continue
-                elif stripped and not stripped.startswith('-') and not stripped.startswith('•'):
-                    # This might be actual date/time content, keep it
-                    fixed_lines.append(line)
-                    in_date_time_section = False
-                    date_time_section_fixed = True
-                    continue
-                elif not stripped:
-                    # Empty line, keep it
-                    fixed_lines.append(line)
-                    continue
-                else:
-                    # This might be actual date/time content, keep it
-                    fixed_lines.append(line)
-                    in_date_time_section = False
-                    date_time_section_fixed = True
-                    continue
-            
-            # If we've fixed the date/time section, continue normally
-            if date_time_section_fixed:
-                in_date_time_section = False
-            
-            # Add the line normally
-            fixed_lines.append(line)
-        
-        return '\n'.join(fixed_lines)
-    
     # Apply the fix
     flow_text = fix_meeting_date_time_section(flow_text)
 
@@ -2305,7 +2544,7 @@ def generate_client_dossier(client_name: str = "", client_domain: str = "", clie
         client_agent = get_agents().client_dossier_creator(client_name, client_domain)
         
         task_desc = (
-            f"Do intensive research on the company Techify Solutions and give me a massive report on everything you find.\n\n"
+            f"Do intensive research on the company {client_name} and give me a comprehensive report on everything you find.\n\n"
             "Return MARKDOWN only, with the exact headings (in this order):\n"
             "# Client Dossier: {name}\n"
             "## Executive Summary\n"
@@ -2323,9 +2562,10 @@ def generate_client_dossier(client_name: str = "", client_domain: str = "", clie
             f"{client_context or 'No additional context provided.'}\n"
             "ADDITIONAL CONTEXT END\n\n"
             "Use the PERPLEXITY RESEARCH and ADDITIONAL CONTEXT sections above to write the dossier. "
-            "Structure the information into the specified sections. If information for a section is missing, "
-            "write 'Information not available in research.' for that section. "
-            "Do NOT invent facts about the client."
+            "Structure the information into the specified sections. "
+            "CRITICAL: If ANY section has insufficient information or cannot be substantiated, OMIT THE ENTIRE SECTION completely. "
+            "Do NOT show section headers with placeholder text like 'Information not available in research.' "
+            "Do NOT invent facts about the client. Only include sections with concrete, verifiable information."
         ).replace("{name}", client_name)
 
         # Import CrewAI components when needed

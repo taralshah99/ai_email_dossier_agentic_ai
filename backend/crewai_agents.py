@@ -42,7 +42,8 @@ class MeetingAgents:
                 "Only output 'Unknown Client' if there is truly no clear company name in either the text or email addresses. "
                 "Summarize every email (chronological), extract actionable agenda items and owners, and capture all explicit or implied dates/times. "
                 "Write a detailed Final Conclusion (3—6 sentences) covering outcomes, decisions, owners, and next steps. "
-                "If the thread has only one email, do not use phrases like 'the first email says'—write a direct summary."
+                "If the thread has only one email, do not use phrases like 'the first email says'—write a direct summary. "
+                "CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text."
             ),
             backstory=(
                 "You are a meticulous analyst specializing in email content extraction. "
@@ -65,7 +66,8 @@ class MeetingAgents:
                 "Generate a comprehensive meeting flow document in plain text format with clear headings. "
                 "Focus on meeting objectives, context, discussion points, decisions, blockers, and next steps. "
                 "Use the analysis as primary source; use PRODUCT CONTEXT only to frame discussions, not invent facts. "
-                "Format output as clean, professional text without markdown symbols."
+                "Format output as clean, professional text without markdown symbols. "
+                "CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text."
             ),
             backstory=(
                 "You excel at turning fragmented notes and summaries into a coherent, chronological meeting narrative. "
@@ -91,7 +93,8 @@ class MeetingAgents:
                 f"Create a comprehensive client dossier for '{client_name}' ({client_domain}). "
                 "Focus on client background, industry context, business challenges, decision makers, "
                 "previous interactions, and strategic positioning. Use only verified client information "
-                "from the provided context. Do not invent or speculate about client details."
+                "from the provided context. Do not invent or speculate about client details. "
+                "CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text."
             ),
             backstory=(
                 "You are an expert client researcher who specializes in creating detailed client profiles "
