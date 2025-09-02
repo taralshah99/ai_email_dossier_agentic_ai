@@ -1,5 +1,5 @@
 // Configuration for API endpoints
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
 export const API_BASE_URL = BACKEND_URL;
 
@@ -7,7 +7,11 @@ export const API_BASE_URL = BACKEND_URL;
 export const buildApiUrl = (endpoint) => {
   // Remove leading slash if present to avoid double slashes
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
-  return `${API_BASE_URL}/${cleanEndpoint}`;
+  
+  // Remove trailing slash from BACKEND_URL if present
+  const cleanBackendUrl = BACKEND_URL.endsWith('/') ? BACKEND_URL.slice(0, -1) : BACKEND_URL;
+  
+  return `${cleanBackendUrl}/${cleanEndpoint}`;
 };
 
 export default {

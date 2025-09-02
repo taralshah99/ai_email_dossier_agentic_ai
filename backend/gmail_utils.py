@@ -100,4 +100,77 @@ def get_gmail_user_profile(service):
         print(f"Error fetching Gmail user profile: {e}")
         return None
 
+def extract_participants_from_messages(messages):
+    """Extract all participants (sender, recipients, CC, BCC) from email messages."""
+    participants = {
+        'sender': set(),
+        'recipients': set(),
+        'cc': set(),
+        'bcc': set()
+    }
+    
+    for message in messages:
+        headers = message.get('payload', {}).get('headers', [])
+        
+        for header in headers:
+            name = header.get('name', '').lower()
+            value = header.get('value', '')
+            
+            if name == 'from':
+                # Extract email from sender (handle "Name <email>" format)
+                email = extract_email_from_string(value)
+                if email:
+                    participants['sender'].add(email)
+            elif name == 'to':
+                # Parse multiple recipients
+                recipients = parse_email_addresses(value)
+                participants['recipients'].update(recipients)
+            elif name == 'cc':
+                recipients = parse_email_addresses(value)
+                participants['cc'].update(recipients)
+            elif name == 'bcc':
+                recipients = parse_email_addresses(value)
+                participants['bcc'].update(recipients)
+    
+    # Convert sets to lists for JSON serialization
+    return {
+        'sender': list(participants['sender']),
+        'recipients': list(participants['recipients']),
+        'cc': list(participants['cc']),
+        'bcc': list(participants['bcc'])
+    }
+
+def extract_email_from_string(email_string):
+    """Extract a single email address from a string that may contain a name and email."""
+    import re
+    
+    # Pattern to match "Name <email>" format
+    name_email_pattern = r'<([^>]+)>'
+    match = re.search(name_email_pattern, email_string)
+    
+    if match:
+        # Extract email from <email> format
+        return match.group(1).lower()
+    else:
+        # If no angle brackets, try to extract email directly
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        match = re.search(email_pattern, email_string)
+        if match:
+            return match.group(0).lower()
+    
+    return None
+
+def parse_email_addresses(email_string):
+    """Parse email addresses from a string that may contain multiple addresses."""
+    import re
+    
+    # Common email patterns
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    
+    # Find all email addresses in the string
+    emails = re.findall(email_pattern, email_string)
+    
+    # Clean up and return unique emails
+    return set(email.lower() for email in emails if email)
+
 
