@@ -146,9 +146,22 @@ def extract_all_participants_from_emails(emails, gmail_service=None):
     header_stats = {"from": 0, "to": 0, "cc": 0, "bcc": 0, "delivered-to": 0, "x-original-to": 0}
     
     if not emails:
+        print("[extract_participants] No emails provided")
         return participants
     
     print(f"[extract_participants] Processing {len(emails)} emails to extract ALL participants...")
+    
+    # Debug: Print the structure of the first email
+    if emails:
+        first_email = emails[0]
+        print(f"[extract_participants] First email keys: {list(first_email.keys())}")
+        if 'payload' in first_email:
+            print(f"[extract_participants] First email payload keys: {list(first_email['payload'].keys())}")
+            if 'headers' in first_email['payload']:
+                print(f"[extract_participants] First email header count: {len(first_email['payload']['headers'])}")
+                # Print first few headers for debugging
+                for i, header in enumerate(first_email['payload']['headers'][:5]):
+                    print(f"[extract_participants] Header {i}: {header.get('name', 'NO_NAME')} = {header.get('value', 'NO_VALUE')[:50]}...")
     
     # Get Gmail user's email from profile
     gmail_user_email = None
@@ -257,6 +270,17 @@ def extract_all_participants_from_emails(emails, gmail_service=None):
                 if 'headers' in email['payload']:
                     print(f"[extract_participants] DEBUG: Header count: {len(email['payload']['headers'])}")
         
+        # Debug: Print participant-related headers for all emails
+        participant_headers = []
+        for header in headers:
+            name = header.get("name", "").lower()
+            value = header.get("value", "")
+            if name in ["from", "to", "cc", "bcc", "delivered-to", "x-original-to", "reply-to"] and value:
+                participant_headers.append(f"{name}: {value}")
+        
+        if participant_headers:
+            print(f"[extract_participants] Email {email_idx + 1} participant headers: {participant_headers}")
+        
         for header in headers:
             name = header.get("name", "").lower()
             value = header.get("value", "")
@@ -300,6 +324,12 @@ def extract_all_participants_from_emails(emails, gmail_service=None):
                                     # jsmith -> Jsmith
                                     display_name = local_part.capitalize()
                             
+                            # Clean up display name - remove extra spaces and normalize
+                            if display_name:
+                                display_name = ' '.join(display_name.split())  # Remove extra spaces
+                                # Capitalize first letter of each word
+                                display_name = ' '.join(word.capitalize() for word in display_name.split())
+                            
                             # Add to participants dictionary
                             if email_addr not in participants:
                                 participants[email_addr] = {
@@ -328,6 +358,12 @@ def extract_all_participants_from_emails(emails, gmail_service=None):
                                 display_name = ' '.join(part.capitalize() for part in name_parts)
                             else:
                                 display_name = local_part.capitalize()
+                            
+                            # Clean up display name - remove extra spaces and normalize
+                            if display_name:
+                                display_name = ' '.join(display_name.split())  # Remove extra spaces
+                                # Capitalize first letter of each word
+                                display_name = ' '.join(word.capitalize() for word in display_name.split())
                             
                             # Add to participants dictionary
                             if email_addr not in participants:
@@ -1332,6 +1368,7 @@ def analyze_thread_content(thread_id: str):
         print(f"[analyze_thread_content] Extracting participants...")
         participants = extract_all_participants_from_emails(messages, service)
         print(f"[analyze_thread_content] Found {len(participants)} participants")
+        print(f"[analyze_thread_content] Participants: {participants}")
         
         # Ensure Gmail user is always included
         try:
@@ -1368,6 +1405,7 @@ def analyze_thread_content(thread_id: str):
             "first_email_date": None,
             "last_email_date": None
         }
+        print(f"[analyze_thread_content] Created thread_metadata: {thread_metadata}")
     except Exception as e:
         print(f"[analyze_thread_content] Error in initialization: {e}")
         import traceback
@@ -1392,26 +1430,49 @@ def analyze_thread_content(thread_id: str):
     # Extract dates from messages
     if messages:
         dates = []
-        for msg in messages:
+        print(f"[analyze_thread_content] Extracting dates from {len(messages)} messages...")
+        for msg_idx, msg in enumerate(messages):
             headers = msg.get("payload", {}).get("headers", [])
+            print(f"[analyze_thread_content] Message {msg_idx + 1} has {len(headers)} headers")
+            
+            # Debug: Print date-related headers
+            date_headers = []
+            for header in headers:
+                name = header.get("name", "").lower()
+                value = header.get("value", "")
+                if name == "date":
+                    date_headers.append(value)
+            
+            if date_headers:
+                print(f"[analyze_thread_content] Message {msg_idx + 1} date headers: {date_headers}")
+            
             for header in headers:
                 if header.get("name", "").lower() == "date":
                     try:
                         from email.utils import parsedate_to_datetime
                         date_value = header.get("value", "")
+                        print(f"[analyze_thread_content] Found date header: {date_value}")
                         if date_value:
                             date_obj = parsedate_to_datetime(date_value)
                             if date_obj:  # Make sure we got a valid date object
                                 dates.append(date_obj)
+                                print(f"[analyze_thread_content] Successfully parsed date: {date_obj}")
+                            else:
+                                print(f"[analyze_thread_content] Failed to parse date: {date_value}")
                     except Exception as e:
                         # Log the error but continue processing
                         print(f"Error parsing date '{header.get('value', '')}': {e}")
                         pass
         
+        print(f"[analyze_thread_content] Extracted {len(dates)} valid dates")
         if dates:
             dates.sort()
             thread_metadata["first_email_date"] = dates[0].strftime("%Y-%m-%d %H:%M:%S")
             thread_metadata["last_email_date"] = dates[-1].strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[analyze_thread_content] Set first_email_date: {thread_metadata['first_email_date']}")
+            print(f"[analyze_thread_content] Set last_email_date: {thread_metadata['last_email_date']}")
+        else:
+            print("[analyze_thread_content] No valid dates found")
 
     email_content = []
     for msg in messages:
@@ -1425,6 +1486,17 @@ def analyze_thread_content(thread_id: str):
     # NEW: Prepend subject to the email thread text
     full_email_thread_text = f"Subject: {subject or 'No Subject'}\n" + "\n".join(email_content)
     print(f"[analyze_thread_content] Email content length: {len(full_email_thread_text)} characters")
+
+    # NEW: Create participant context for AI
+    participant_context = ""
+    if participants:
+        participant_context = "\n\n=== PARTICIPANT INFORMATION ===\n"
+        for email, participant in participants.items():
+            roles_list = list(participant.get('roles', []))
+            participant_context += f"• {participant.get('display_name', email)} ({email}) - Roles: {', '.join(roles_list)}\n"
+        participant_context += "=== END PARTICIPANT INFORMATION ===\n\n"
+    
+    print(f"[analyze_thread_content] Participant context: {participant_context}")
 
     print(f"[analyze_thread_content] Creating analysis agent...")
     analysis_agent = get_agents().meeting_agenda_extractor()
@@ -1444,7 +1516,8 @@ def analyze_thread_content(thread_id: str):
             "- Expand the Final Conclusion into 3-6 detailed sentences covering outcomes, next steps, blockers, decisions, and owners.\n"
             "- Extract product information whenever present. If absent, return 'Unknown' and a plausible domain.\n"
             "- Use bullet points for lists. Keep tone concise and professional.\n"
-            "- CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text.\n\n"
+            "- CRITICAL: If ANY section has insufficient information, OMIT THE ENTIRE SECTION completely. Do NOT show section headers with placeholder text.\n"
+            "- CRITICAL: Use the actual participant names provided in the participant information section. NEVER use generic terms like 'unknown sender', 'unnamed sender', 'unidentified sender', or 'anonymous sender'. Always use the real names.\n\n"
             "Return exactly this template and fill it thoroughly, OMITTING any sections with insufficient information:\n\n"
             "**Email Summaries:**\n"
             "- [One bullet per email in chronological order. Include sender, intent, key facts, and explicit asks/decisions. If no emails to summarize, OMIT THIS ENTIRE SECTION.]\n\n"
@@ -1457,7 +1530,7 @@ def analyze_thread_content(thread_id: str):
             "**Client Name:** [If present; else 'Unknown Client']\n"
             "**Product Name:** [If present; else 'Unknown']\n"
             "**Product Domain:** [If present; else best-guess domain, e.g., 'SaaS', 'HR tech', 'payments']\n\n"
-            f"--- EMAIL THREAD CONTENT (verbatim) ---\n{full_email_thread_text}"
+            f"{participant_context}--- EMAIL THREAD CONTENT (verbatim) ---\n{full_email_thread_text}"
         ),
         expected_output=(
             "A detailed and strictly structured report that follows the template, with a multi-sentence Final Conclusion and no 'first email says' phrasing when only one email exists."
@@ -1511,6 +1584,8 @@ def analyze_thread_content(thread_id: str):
         "domain_based_client_names": domain_based_client_names,  # Include for debugging
         "available_client_names": domain_based_client_names  # Include for UI selection
     }
+    
+    print(f"[analyze_thread_content] Returning result with thread_metadata: {thread_metadata}")
 
 
 def analyze_multiple_threads(thread_ids: list):
@@ -1527,6 +1602,12 @@ def analyze_multiple_threads(thread_ids: list):
             print(f"[analyze_multiple_threads] Single thread analysis completed, adapting format")
             
             # Adapt single thread result to multiple thread format
+            thread_metadata = single_result.get("thread_metadata", {})
+            participants = thread_metadata.get("participants", {})
+            
+            print(f"[analyze_multiple_threads] Single thread adaptation - thread_metadata: {thread_metadata}")
+            print(f"[analyze_multiple_threads] Single thread adaptation - participants: {participants}")
+            
             adapted_result = {
                 "analysis": single_result["analysis"],
                 "structured_analysis": single_result["structured_analysis"],
@@ -1535,12 +1616,17 @@ def analyze_multiple_threads(thread_ids: list):
                 "thread_count": 1,
                 "combined_metadata": {
                     "thread_count": 1,
-                    "total_participants": len(single_result.get("available_client_names", [])),
-                    "participants": {},
-                    "threads": []
+                    "total_participants": len(participants),
+                    "participants": participants,
+                    "first_email_date": thread_metadata.get("first_email_date"),
+                    "last_email_date": thread_metadata.get("last_email_date"),
+                    "threads": [thread_metadata] if thread_metadata else [],
+                    "total_messages": thread_metadata.get("message_count", 0)
                 },
                 "available_client_names": single_result["available_client_names"]
             }
+            
+            print(f"[analyze_multiple_threads] Single thread adaptation - adapted_result: {adapted_result}")
             return adapted_result
         except Exception as e:
             print(f"[analyze_multiple_threads] Single thread analysis failed: {e}, continuing with multiple thread analysis")
@@ -1664,6 +1750,17 @@ def analyze_multiple_threads(thread_ids: list):
         relevancy_context += f"\nIRRELEVANT THREADS ({len(irrelevant_threads)} threads):\n"
         relevancy_context += f"{', '.join(irrelevant_subjects)}\n"
     
+    # Create participant context for AI
+    participant_context = ""
+    if combined_metadata and combined_metadata.get("participants"):
+        participant_context = "\n\n=== PARTICIPANT INFORMATION ===\n"
+        for email, participant in combined_metadata["participants"].items():
+            roles_list = participant.get('roles', [])
+            participant_context += f"• {participant.get('display_name', email)} ({email}) - Roles: {', '.join(roles_list)}\n"
+        participant_context += "=== END PARTICIPANT INFORMATION ===\n\n"
+    
+    print(f"[analyze_multiple_threads] Participant context: {participant_context}")
+    
     json_schema = (
         "{"
         "\n  \"relevant_groups\": ["
@@ -1716,8 +1813,9 @@ def analyze_multiple_threads(thread_ids: list):
                 "- Include a group-specific final_conclusion that covers outcomes, decisions, stakeholders, next steps, and deadlines.\n"
                 "- IMPORTANT: Do NOT create irrelevant_threads in this analysis - they are processed separately.\n"
                 "- In global_summary: Create relevancy_insights that explain the overall conversation agenda and what was actually discussed in the emails, focusing on business context and outcomes.\n"
-                "- Focus on ACTUAL EMAIL CONTENT and real business outcomes, not just metadata or thread organization.\n\n"
-                f"EMAIL CONTENT START\n{combined_content}\nEMAIL CONTENT END"
+                "- Focus on ACTUAL EMAIL CONTENT and real business outcomes, not just metadata or thread organization.\n"
+                "- CRITICAL: Use the actual participant names provided in the participant information section. NEVER use generic terms like 'unknown sender', 'unnamed sender', 'unidentified sender', or 'anonymous sender'. Always use the real names.\n\n"
+                f"{participant_context}{relevancy_context}EMAIL CONTENT START\n{combined_content}\nEMAIL CONTENT END"
             ),
             expected_output="Valid JSON matching the schema with relevancy-aware grouped results and a global summary.",
             agent=analysis_agent

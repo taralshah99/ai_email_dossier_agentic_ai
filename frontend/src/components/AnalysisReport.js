@@ -150,6 +150,11 @@ function AnalysisReport({
     const metadata = combinedMetadata || threadMetadata;
     if (!metadata) return null;
     
+    // Debug: Log the metadata to see what we're working with
+    console.log("[AnalysisReport] Debug - metadata:", metadata);
+    console.log("[AnalysisReport] Debug - combinedMetadata:", combinedMetadata);
+    console.log("[AnalysisReport] Debug - threadMetadata:", threadMetadata);
+    
     // Calculate email count
     let emailCount = 0;
     if (combinedMetadata) {
@@ -164,7 +169,7 @@ function AnalysisReport({
       emailCount = threadMetadata.message_count || 0;
     }
     
-    return {
+    const result = {
       firstEmailDate: metadata.first_email_date,
       lastEmailDate: metadata.last_email_date,
       emailCount: emailCount,
@@ -172,6 +177,11 @@ function AnalysisReport({
       participants: metadata.participants || {},
       totalParticipants: metadata.total_participants || Object.keys(metadata.participants || {}).length
     };
+    
+    // Debug: Log the result
+    console.log("[AnalysisReport] Debug - threadSummary result:", result);
+    
+    return result;
   };
   
   // Get consolidated email summaries as bullet points
@@ -226,38 +236,71 @@ function AnalysisReport({
       return [];
     }
     
-    // Replace "Unknown Sender" with actual participant names
-    const threadSummary = getThreadSummary();
-    if (threadSummary && threadSummary.participants) {
-      allSummaries = allSummaries.map(summary => {
-        let updatedSummary = summary;
-        
-        // Look for "Unknown Sender" patterns and try to replace with actual names
-        if (updatedSummary.toLowerCase().includes('unknown sender')) {
-          // Try to find email patterns in the summary and match with participants
-          const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
-          const emailsInSummary = updatedSummary.match(emailRegex) || [];
-          
-          emailsInSummary.forEach(email => {
-            const participant = threadSummary.participants[email.toLowerCase()];
-            if (participant && participant.display_name) {
-              // Replace "Unknown Sender" with the actual name when the email is mentioned
-              updatedSummary = updatedSummary.replace(/unknown sender/gi, participant.display_name);
-            }
-          });
-          
-          // If no email found in summary but we have participants, try to replace with first participant
-          if (!emailsInSummary.length && Object.keys(threadSummary.participants).length > 0) {
-            const firstParticipant = Object.values(threadSummary.participants)[0];
-            if (firstParticipant && firstParticipant.display_name) {
-              updatedSummary = updatedSummary.replace(/unknown sender/gi, firstParticipant.display_name);
-            }
-          }
-        }
-        
-        return updatedSummary;
-      });
-    }
+         // Replace "Unknown Sender" with actual participant names
+     const threadSummary = getThreadSummary();
+     if (threadSummary && threadSummary.participants) {
+       allSummaries = allSummaries.map(summary => {
+         let updatedSummary = summary;
+         
+         // Look for various "unknown sender" patterns and try to replace with actual names
+         const unknownPatterns = [
+           /unknown sender/gi,
+           /unnamed sender/gi,
+           /unidentified sender/gi,
+           /anonymous sender/gi,
+           /sender/gi
+         ];
+         
+         // Try to find email patterns in the summary and match with participants
+         const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+         const emailsInSummary = updatedSummary.match(emailRegex) || [];
+         
+         // Replace unknown sender patterns with actual participant names
+         unknownPatterns.forEach(pattern => {
+           if (updatedSummary.toLowerCase().includes(pattern.source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').toLowerCase())) {
+             // If we have emails in the summary, try to match with participants
+             if (emailsInSummary.length > 0) {
+               emailsInSummary.forEach(email => {
+                 const participant = threadSummary.participants[email.toLowerCase()];
+                 if (participant && participant.display_name) {
+                   // Replace the pattern with the actual name when the email is mentioned
+                   updatedSummary = updatedSummary.replace(pattern, participant.display_name);
+                 }
+               });
+             } else {
+               // If no email found in summary but we have participants, try to replace with first participant
+               if (Object.keys(threadSummary.participants).length > 0) {
+                 const firstParticipant = Object.values(threadSummary.participants)[0];
+                 if (firstParticipant && firstParticipant.display_name) {
+                   updatedSummary = updatedSummary.replace(pattern, firstParticipant.display_name);
+                 }
+               }
+             }
+           }
+         });
+         
+         // Additional pattern matching for common generic terms
+         const genericPatterns = [
+           { pattern: /\b(?:the|an?)\s+(?:sender|person|user|participant)\b/gi, replacement: 'the sender' },
+           { pattern: /\b(?:some|one|a)\s+(?:sender|person|user|participant)\b/gi, replacement: 'someone' },
+           { pattern: /\b(?:email|message)\s+(?:sender|from|author)\b/gi, replacement: 'email sender' }
+         ];
+         
+         genericPatterns.forEach(({ pattern, replacement }) => {
+           if (updatedSummary.match(pattern)) {
+             // Try to replace with actual participant names
+             if (Object.keys(threadSummary.participants).length > 0) {
+               const firstParticipant = Object.values(threadSummary.participants)[0];
+               if (firstParticipant && firstParticipant.display_name) {
+                 updatedSummary = updatedSummary.replace(pattern, firstParticipant.display_name);
+               }
+             }
+           }
+         });
+         
+         return updatedSummary;
+       });
+     }
     
     return allSummaries;
   };
